@@ -1,3 +1,3 @@
 """AniPresence - detect anime playing in Chrome and mirror it to Discord."""
 
-__version__ = "1.9.1"
+__version__ = "1.9.2"

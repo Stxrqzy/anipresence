@@ -26,6 +26,9 @@ query ($search: String, $perPage: Int) {
       description(asHtml: false)
       siteUrl
       episodes
+      season
+      seasonYear
+      nextAiringEpisode { airingAt episode }
       meanScore
       genres
       isAdult
@@ -45,6 +48,9 @@ query ($id: Int) {
     description(asHtml: false)
     siteUrl
     episodes
+    season
+    seasonYear
+    nextAiringEpisode { airingAt episode }
     meanScore
     genres
     isAdult
@@ -68,6 +74,9 @@ query ($name: String) {
           coverImage { extraLarge large }
           siteUrl
           episodes
+          season
+          seasonYear
+          nextAiringEpisode { airingAt episode }
           isAdult
           genres
           tags { name isAdult }
@@ -107,6 +116,10 @@ class Media:
     description: str = ""
     site_url: str = ""
     episodes: Optional[int] = None
+    season: str = ""              # "WINTER"/"SPRING"/"SUMMER"/"FALL"
+    season_year: Optional[int] = None
+    next_airing_at: Optional[int] = None   # unix epoch of the next episode
+    next_airing_episode: Optional[int] = None
     mean_score: Optional[int] = None
     genres: list = field(default_factory=list)
     is_adult: bool = False
@@ -120,6 +133,7 @@ class Media:
         # as_dict() serializes the dataclass flat (title_romaji / cover_large /
         # cover_extra_large), while AniList GraphQL uses nested shapes. Accept both.
         flat = "title_romaji" in d
+        next_airing = d.get("nextAiringEpisode") or {}
         return cls(
             id=d.get("id"),
             title_romaji=(title.get("romaji") if not flat else d.get("title_romaji")) or "",
@@ -136,6 +150,16 @@ class Media:
             description=d.get("description") or "",
             site_url=d.get("siteUrl") or d.get("site_url") or "",
             episodes=d.get("episodes"),
+            season=(d.get("season") if not flat else d.get("season")) or "",
+            season_year=d.get("seasonYear", d.get("season_year")),
+            next_airing_at=(
+                next_airing.get("airingAt")
+                if not flat else d.get("next_airing_at")
+            ),
+            next_airing_episode=(
+                next_airing.get("episode")
+                if not flat else d.get("next_airing_episode")
+            ),
             mean_score=d.get("meanScore", d.get("mean_score")),
             genres=list(d.get("genres") or []),
             is_adult=bool(d.get("isAdult") or d.get("is_adult")),

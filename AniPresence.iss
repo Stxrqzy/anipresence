@@ -14,7 +14,7 @@
 ; %APPDATA%\AniPresence and is intentionally left untouched on uninstall.
 
 #ifndef MyAppVersion
-  #define MyAppVersion "1.9.1"
+  #define MyAppVersion "1.9.2"
 #endif
 
 #define MyAppName "AniPresence"

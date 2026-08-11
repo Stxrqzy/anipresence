@@ -24,9 +24,11 @@ from the page title.
 - **Account indicator** — the active AniList account shows its profile picture
   next to the account selector, so you always know whose watch history/stats
   you're looking at.
-- **Rich Presence** — AniList cover art as the large image, `Watching: <Title>`,
-  `Episode N · 12:34 / 25:00 · on <Site>` (playback progress inline), elapsed +
-  remaining timestamps, and two buttons (*Watch Anime*, *Open AniList*).
+- **Rich Presence** — AniList cover art (highest-resolution variant) as the large
+  image, `Watching: <Title>`, `Episode N of M · Next: Ep N+1 · Fri` (episode
+  totals + the next airing date, shown when you're caught up), inline playback
+  progress, elapsed + remaining timestamps, and two buttons (*Watch Anime*,
+  *Open AniList*).
 - **Vencord bridge** — optional broadcast through a Vencord userplugin
   (`vencord-plugin\anipresence\`) so friends see your presence even with an
   unverified Application ID; pick `Vencord bridge` or `Both` under Broadcast.
@@ -52,8 +54,12 @@ from the page title.
   Windows 10) with translucent panels and a theme-matched title bar; presence is
   cleared on quit so nothing lingers in Discord.
 - **Cinematic backdrop** — dims the current cover art behind the whole window
-  for a movie-theatre look (toggle under Controls). Pairs with Mica for a
-  frosted-glass key-art glow.
+  for a movie-theatre look (toggle under Controls). Rendered from the largest
+  cover variant at display resolution, so it stays crisp on HiDPI screens.
+  Pairs with Mica for a frosted-glass key-art glow.
+- **Auto accent** — samples a vibrant accent color from the current cover art and
+  re-tints the buttons, spinner and tray icon per show. Turn it off under
+  Controls (or pick a manual accent) to pin a fixed color.
 - **Rich Presence preview** — a live mockup of your Discord activity card
   (details, state, elapsed clock, buttons) updates under the dashboard as you
   watch.
@@ -269,10 +275,12 @@ totals. Covers are cached in `%APPDATA%\AniPresence\covers\`.
 
 **Privacy mode** strips URLs out of the on-screen log (and recent tooltips).
 
-**Accent color & theme**: pick an accent color next to the theme selector.
-The theme can be `Dark`, `Light` or `System` — `System` follows Windows'
-light/dark app mode and even updates live while the app runs. "Compact layout"
-tightens spacing for smaller windows.
+**Accent color & theme**: pick an accent color next to the theme selector
+(picking one disables the auto accent). With **Auto accent from cover art**
+enabled, the accent follows the current show's key art instead. The theme can be
+`Dark`, `Light` or `System` — `System` follows Windows' light/dark app mode and
+even updates live while the app runs. "Compact layout" tightens spacing for
+smaller windows.
 
 **Start with Windows** registers the packaged exe in the Windows startup (it
 then starts minimized to the tray).
@@ -357,6 +365,7 @@ defaults). All keys:
 | `min_match_score` | `60` | Fuzzy-match confidence floor (logging only) |
 | `theme` | `"dark"` | Interface theme: `dark`, `light`, or `system` (follows Windows light/dark) |
 | `accent` | `"#7c5cff"` | Accent color as a hex string |
+| `auto_accent` | `true` | Sample the accent color from the current cover art |
 | `compact` | `false` | Compact layout (tighter spacing/padding) |
 | `minimize_to_tray` | `true` | Close hides to the tray instead of quitting |
 | `start_windows` | `false` | Register in Windows startup (packaged exe only) |

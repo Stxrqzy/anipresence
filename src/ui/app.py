@@ -15,7 +15,7 @@ from PySide6.QtCore import (
     QAbstractNativeEventFilter, QAbstractAnimation, QEasingCurve, QEvent, QPoint,
     QPropertyAnimation, QRect, QRectF, QSignalBlocker, QSize, Qt, QTimer, QUrl,
 )
-from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPen, QPixmap
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QColorDialog, QComboBox, QDialog, QDialogButtonBox,
@@ -36,6 +36,7 @@ except Exception:  # noqa: BLE001
     QTCHARTS_OK = False
 
 from .. import __version__
+from ..anime.titles import format_episode_progress, format_season, next_airing_label
 from ..config import APP_DIR, ConfigManager, redact_urls
 from ..core.controller import Controller
 from ..core.watchlog import format_hours
@@ -255,6 +256,46 @@ def base_qrgb(accent):
     if not base.isValid():
         base = QColor("#7c5cff")
     return base.red(), base.green(), base.blue()
+
+
+def _sample_accent_color(pixmap):
+    """Pick a vibrant accent color from cover art, or '' when it can't.
+
+    Downscales the art, then takes a saturation-weighted average so white/black
+    filler and near-gray pixels don't dominate the result. The color is pushed
+    to a mid lightness and a strong saturation so it pops on either theme.
+    """
+    if pixmap is None or pixmap.isNull():
+        return ""
+    img = pixmap.toImage().convertToFormat(QImage.Format_ARGB32)
+    if img.isNull():
+        return ""
+    img = img.scaled(64, 64, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+    r = g = b = wsum = 0.0
+    for y in range(img.height()):
+        for x in range(img.width()):
+            c = QColor(img.pixel(x, y))
+            if c.alpha() < 128:
+                continue
+            sat = c.hsvSaturation()
+            w = (sat / 255.0) ** 2  # vivid pixels vote louder
+            if w < 0.02:
+                continue
+            r += c.red() * w
+            g += c.green() * w
+            b += c.blue() * w
+            wsum += w
+    if wsum <= 0:
+        return ""
+    col = QColor(int(r / wsum), int(g / wsum), int(b / wsum))
+    h = col.hue()
+    if h < 0:  # achromatic average
+        return ""
+    s = col.saturation()
+    v = col.value()
+    s = max(160, min(255, int(s * 1.25)))
+    v = 120 if v < 120 else (200 if v > 200 else v)
+    return QColor.fromHsv(h, s, v).name()
 
 
 def _version_tuple(text):
@@ -1329,6 +1370,11 @@ class MainWindow(QMainWindow):
             "Dim the current cover art behind the whole window for a cinematic look. "
             "The base window fills become translucent so the backdrop shows through."
         )
+        self.auto_accent_check = QCheckBox("Auto accent from cover art")
+        self.auto_accent_check.setToolTip(
+            "Sample a vibrant accent color from the current cover art and tint the "
+            "buttons, spinner and tray icon per show. Pick a manual accent to override."
+        )
         self.hide_adult_check = QCheckBox("Hide 18+/ecchi from Discord status")
         self.hide_adult_check.setToolTip(
             "Don't broadcast animes that are 18+ or ecchi/NSFW-adjacent to Discord. "
@@ -1341,6 +1387,7 @@ class MainWindow(QMainWindow):
             self.tray_check, self.startup_check, self.privacy_check,
             self.compact_check, self.idle_check, self.mica_check,
             self.cinematic_check, self.hide_adult_check,
+            self.auto_accent_check,
         ]
         grid = QGridLayout()
         grid.setSpacing(8)
@@ -2051,6 +2098,7 @@ class MainWindow(QMainWindow):
         self.idle_check.toggled.connect(lambda on: self.cfg.set(idle_presence=on))
         self.mica_check.toggled.connect(self._on_mica_toggled)
         self.cinematic_check.toggled.connect(self._on_cinematic_toggled)
+        self.auto_accent_check.toggled.connect(self._on_auto_accent_toggled)
         self.hide_adult_check.toggled.connect(lambda on: self.cfg.set(hide_adult_content=on))
         self.anilist_combo.currentIndexChanged.connect(self._on_anilist_account_switch)
         self.interval_spin.valueChanged.connect(self._on_interval_changed)
@@ -2102,6 +2150,7 @@ class MainWindow(QMainWindow):
         load(self.idle_check, self.cfg.data.idle_presence)
         load(self.mica_check, self.cfg.data.mica_backdrop)
         load(self.cinematic_check, self.cfg.data.cinematic_backdrop)
+        load(self.auto_accent_check, self.cfg.data.auto_accent)
         load(self.hide_adult_check, self.cfg.data.hide_adult_content)
         from ..startup import is_enabled
         load(self.startup_check, self.cfg.data.start_windows and is_enabled())
@@ -2162,6 +2211,11 @@ class MainWindow(QMainWindow):
         self.cfg.set(cinematic_backdrop=on)
         self._apply_stylesheet()
 
+    def _on_auto_accent_toggled(self, on):
+        self.cfg.set(auto_accent=on)
+        if on:
+            self._maybe_auto_accent()
+
     def _on_theme_changed(self, index):
         theme = THEME_VALUE.get(index, "dark")
         self.cfg.set(theme=theme)
@@ -2178,7 +2232,9 @@ class MainWindow(QMainWindow):
             current = QColor("#7c5cff")
         color = QColorDialog.getColor(current, self, "Choose accent color")
         if color.isValid():
-            self.cfg.set(accent=color.name())
+            self.cfg.set(accent=color.name(), auto_accent=False)
+            if self.auto_accent_check is not None:
+                self.auto_accent_check.setChecked(False)
             self.setWindowIcon(app_icon(64, color.name()))
             if self._tray:
                 self._tray_base_pm = None
@@ -2419,7 +2475,19 @@ class MainWindow(QMainWindow):
 
         parts = []
         if payload.get("episode"):
-            parts.append(f"Episode {payload['episode']}")
+            parts.append(
+                format_episode_progress(payload["episode"], payload.get("episodes_total"))
+            )
+        airing = next_airing_label(
+            payload.get("next_airing_at"),
+            payload.get("next_airing_episode"),
+            payload.get("episode"),
+        )
+        if airing and not payload.get("paused"):
+            parts.append(airing)
+        season = format_season(payload.get("season"), payload.get("season_year"))
+        if season:
+            parts.append(season)
         if payload.get("website"):
             parts.append(f"on {payload['website']}")
         self.episode_label.setText(" · ".join(parts))
@@ -2472,6 +2540,7 @@ class MainWindow(QMainWindow):
                 )
             )
 
+        self._maybe_auto_accent()
         self._update_preview()
 
     # --------------------------------------------------------------- preview
@@ -2537,14 +2606,23 @@ class MainWindow(QMainWindow):
         self.preview_title.setText(f"Watching: {title}")
         duration = float(payload.get("duration") or 0)
         current = float(payload.get("current_time") or 0)
+        paused = bool(payload.get("paused"))
         parts = []
         if payload.get("episode"):
-            parts.append(f"Episode {payload['episode']}")
+            parts.append(
+                format_episode_progress(payload["episode"], payload.get("episodes_total"))
+            )
+        airing = next_airing_label(
+            payload.get("next_airing_at"),
+            payload.get("next_airing_episode"),
+            payload.get("episode"),
+        )
+        if airing and not paused:
+            parts.append(airing)
         if duration > 0:
             parts.append(f"{format_seconds(current)} / {format_seconds(duration)}")
         if payload.get("website"):
             parts.append(f"on {payload['website']}")
-        paused = bool(payload.get("paused"))
         self.preview_status.setText("Paused" if paused else "Playing")
         if paused and parts:
             parts = ["Paused"] + parts
@@ -2577,11 +2655,33 @@ class MainWindow(QMainWindow):
         self.preview_elapsed.setText(f"{format_seconds(elapsed)} elapsed")
 
     # ------------------------------------------------------------- ambient
+    def _maybe_auto_accent(self):
+        """Sample the current cover art for an accent color (when enabled)."""
+        if not self.cfg.data.auto_accent:
+            return
+        if not self._cover_pixmap or self._cover_pixmap.isNull():
+            return
+        color = _sample_accent_color(self._cover_pixmap)
+        if not color:
+            return
+        if color.lower() == str(self.cfg.data.accent or "").lower():
+            return
+        self.cfg.set(accent=color)
+        if self._cover_spinner is not None:
+            self._cover_spinner.set_color(color)
+        self.setWindowIcon(app_icon(64, color))
+        if self._tray:
+            self._tray_base_pm = None
+            self._tray.setIcon(app_icon(64, color))
+            self._update_tray_icon(self._tray_fraction)
+        self._apply_stylesheet()
+
     def _update_ambient(self):
         """Fill the window behind the UI with the cover art (cinematic mode).
 
         Rests the pixmap to a cover-crop fill every resize; the QSS makes the
-        base window fills transparent so this layer peeks through.
+        base window fills transparent so this layer peeks through. The render
+        is scaled by the device-pixel-ratio so it stays crisp on HiDPI displays.
         """
         ambient = self._ambient
         if ambient is None:
@@ -2595,12 +2695,14 @@ class MainWindow(QMainWindow):
         if w <= 0 or h <= 0:
             ambient.hide()
             return
+        dpr = self.devicePixelRatio() or 1.0
         scaled = cover.scaled(
-            w * 2, h * 2, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation
+            int(w * 2 * dpr), int(h * 2 * dpr),
+            Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation,
         )
-        x = (scaled.width() - w) // 2
-        y = (scaled.height() - h) // 2
-        ambient.setPixmap(scaled.copy(x, y, w, h))
+        x = (scaled.width() - int(w * dpr)) // 2
+        y = (scaled.height() - int(h * dpr)) // 2
+        ambient.setPixmap(scaled.copy(x, y, int(w * dpr), int(h * dpr)))
         ambient.setGeometry(0, 0, w, h)
         ambient.lower()
         ambient.show()
@@ -2853,6 +2955,7 @@ class MainWindow(QMainWindow):
                     pixmap.scaled(self.cover_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 )
                 self._cover_spinner.hide()
+                self._maybe_auto_accent()
                 self._update_ambient()
                 return
         self._cover_requested = True
@@ -2936,6 +3039,7 @@ class MainWindow(QMainWindow):
         self.cover_label.setPixmap(
             pixmap.scaled(size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         )
+        self._maybe_auto_accent()
         self._update_ambient()
         try:
             if not self._cover_cache_dir.exists():

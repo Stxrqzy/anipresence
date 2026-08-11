@@ -40,6 +40,10 @@ def test_from_dict_flat_and_nested():
             "title": {"romaji": "Sword Art Online", "english": "SAO"},
             "coverImage": {"large": "https://c/l.jpg", "extraLarge": "https://c/xl.jpg"},
             "siteUrl": "https://anilist.co/anime/9",
+            "episodes": 12,
+            "season": "SUMMER",
+            "seasonYear": 2024,
+            "nextAiringEpisode": {"airingAt": 1723000000, "episode": 8},
             "genres": ["Action"],
             "isAdult": False,
             "tags": [{"name": "Ecchi", "isAdult": False}],
@@ -47,6 +51,11 @@ def test_from_dict_flat_and_nested():
     )
     assert nested.title_romaji == "Sword Art Online"
     assert nested.cover_large == "https://c/l.jpg"
+    assert nested.episodes == 12
+    assert nested.season == "SUMMER"
+    assert nested.season_year == 2024
+    assert nested.next_airing_at == 1723000000
+    assert nested.next_airing_episode == 8
     assert nested.is_adult_content() is True
 
     flat = Media.from_dict(
@@ -54,11 +63,29 @@ def test_from_dict_flat_and_nested():
             "id": 9,
             "title_romaji": "Flat",
             "cover_large": "https://c/f.jpg",
+            "episodes": 24,
+            "season": "WINTER",
+            "season_year": 2023,
+            "next_airing_at": 1723000000,
+            "next_airing_episode": 13,
             "tags": [],
         }
     )
     assert flat.title_romaji == "Flat"
     assert flat.cover_large == "https://c/f.jpg"
+    assert flat.episodes == 24
+    assert flat.season == "WINTER"
+    assert flat.season_year == 2023
+    assert flat.next_airing_at == 1723000000
+    assert flat.next_airing_episode == 13
+
+
+def test_from_dict_missing_airing_is_safe():
+    media = Media.from_dict({"id": 1, "title": {"romaji": "Old"}, "episodes": 12})
+    assert media.next_airing_at is None
+    assert media.next_airing_episode is None
+    assert media.season == ""
+    assert media.season_year is None
 
 
 def test_from_dict_empty_is_safe():

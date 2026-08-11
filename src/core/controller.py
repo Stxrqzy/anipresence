@@ -28,7 +28,9 @@ from ..config import APP_DIR
 from ..anime.anilist import AniListClient, AniListError, Media
 from ..anime.cache import AniCache
 from ..anime.matcher import best_match
-from ..anime.titles import normalize_search, search_terms
+from ..anime.titles import (
+    format_episode_progress, next_airing_label, normalize_search, search_terms,
+)
 from ..browser.cdp import ChromeClient, ChromeError
 from ..browser.detectors import DetectorRegistry, PageContext, VideoState
 from ..browser.extension import ExtensionBridge, ensure_token
@@ -918,12 +920,18 @@ class Controller:
             "title": title,
             "detected_title": detection.cleaned_title or detection.raw_title,
             "episode": detection.episode,
+            "episodes_total": media.episodes if media else None,
+            "season": media.season if media else "",
+            "season_year": media.season_year if media else None,
+            "next_airing_at": media.next_airing_at if media else None,
+            "next_airing_episode": media.next_airing_episode if media else None,
             "website": detection.website,
             "url": detection.url,
             "current_time": video.current_time,
             "duration": video.duration,
             "paused": video.paused,
-            "cover_url": media.cover_large if media else "",
+            "cover_url": media.cover_extra_large or media.cover_large if media else "",
+            "cover_extra_url": media.cover_extra_large if media else "",
             "anilist_url": media.site_url if media else "",
             "anilist_title": title,
             "match_confidence": self._current.confidence,
@@ -976,7 +984,7 @@ class Controller:
             return
 
         title = (media.display_title() if media else None) or detection.cleaned_title or detection.raw_title
-        episode = f"Episode {detection.episode}" if detection.episode else ""
+        episode = format_episode_progress(detection.episode, media.episodes if media else None)
 
         # Discord has no visible "small text" line, and favicon URLs have no file
         # extension (which makes Discord's asset validation reject the activity),
@@ -985,11 +993,20 @@ class Controller:
         if not video.paused and video.duration > 0:
             progress = f"{format_seconds(video.current_time)} / {format_seconds(video.duration)}"
 
+        airing = ""
+        if media and media.next_airing_at and not video.paused:
+            airing = next_airing_label(
+                media.next_airing_at, media.next_airing_episode, detection.episode
+            )
+
         details = f"Watching: {title}"[:128]
         if video.paused:
             state = ("Paused · " + episode) if episode else "Paused"
         else:
-            state = " · ".join(part for part in (episode, progress, f"on {detection.website}") if part)
+            state = " · ".join(
+                part for part in (episode, airing, progress, f"on {detection.website}")
+                if part
+            )
         state = state[:128]
 
         # Prefer the biggest cover AniList offers; the URL must carry a file

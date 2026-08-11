@@ -39,6 +39,7 @@ class Config:
     min_match_score: float = 60.0
     theme: str = "dark"
     accent: str = "#7c5cff"
+    auto_accent: bool = True     # sample the accent from the current cover art
     compact: bool = False
     minimize_to_tray: bool = True
     start_windows: bool = False

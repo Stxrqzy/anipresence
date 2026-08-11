@@ -1,6 +1,10 @@
 """Title normalization helpers shared by detection and matching."""
 
 import re
+import time
+
+# Weekday short names matching AniList airing schedule display (Mon..Sun).
+_WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
 # Tokens that are almost always junk in an extracted slug (site chrome, sub/dub
 # tags, language labels). We deliberately keep words like 'the'/'a' because they
@@ -76,6 +80,50 @@ def strip_trailing_season(text):
     if not text:
         return ""
     return re.sub(r"\s*[–—-]\s*(?:Season\s*\d+|S\d+)\s*$", "", text, flags=re.I).strip()
+
+
+def format_episode_progress(episode, total):
+    """Render an episode as ``Episode 7 of 12`` (or bare ``Episode 7``).
+
+    ``total`` may be None when AniList doesn't publish an episode count.
+    """
+    if not episode:
+        return ""
+    label = f"Episode {episode}"
+    if total:
+        label += f" of {total}"
+    return label
+
+
+def next_airing_label(airing_at, airing_episode, current_episode=None):
+    """A short 'next episode' hint, e.g. ``Next: Fri`` or ``Next: Ep 13 · Fri``.
+
+    Returns ``""`` when there's no scheduled airing, or when the user is already
+    past the next scheduled episode (an old re-watch shouldn't advertise future
+    releases).
+    """
+    if not airing_at:
+        return ""
+    if current_episode is not None and airing_episode is not None:
+        if current_episode >= airing_episode:
+            return ""
+    try:
+        weekday = _WEEKDAYS[time.localtime(airing_at).tm_wday]
+    except (ValueError, OverflowError, OSError):
+        return ""
+    if airing_episode:
+        return f"Next: Ep {airing_episode} · {weekday}"
+    return f"Next: {weekday}"
+
+
+def format_season(season, year):
+    """Render an AniList season+year pair, e.g. ``Summer 2024`` ('' if unset)."""
+    season = (season or "").title()
+    if not season:
+        return ""
+    if year:
+        return f"{season} {year}"
+    return season
 
 
 def significant_tokens(title):
