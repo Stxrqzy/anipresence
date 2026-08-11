@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "AniPresence Bridge",
+  "version": "1.6.0",
+  "description": "Reports the anime currently playing to AniPresence on your desktop.",
+  "permissions": [
+    "storage",
+    "alarms"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:8793/*",
+    "http://localhost:8793/*"
+  ],
+  "options_page": "options.html"
+}

@@ -1,0 +1,13 @@
+{
+  "discord_application_id": "1534265295609266330",
+  "chrome_debugging_port": 9222,
+  "poll_interval_seconds": 5,
+  "chrome_auto_launch": true,
+  "chrome_path": "",
+  "anilist_cache_ttl_days": 7,
+  "show_paused_presence": true,
+  "rpc_enabled": true,
+  "detection_enabled": true,
+  "hide_when_no_video": true,
+  "min_match_score": 60
+}

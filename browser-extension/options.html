@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>AniPresence Bridge — options</title>
+  <style>
+    body { font: 14px/1.5 system-ui, sans-serif; max-width: 460px; margin: 40px auto;
+           padding: 0 16px; color: #111318; }
+    h1 { font-size: 18px; }
+    label { display: block; margin: 14px 0 4px; font-weight: 600; }
+    input { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #ccc;
+            border-radius: 6px; }
+    button { margin-top: 18px; padding: 8px 18px; border: 0; border-radius: 6px;
+             background: #7c5cff; color: #fff; cursor: pointer; }
+    #test { background: #334155; margin-left: 8px; }
+    .hint { color: #6b7280; font-size: 12px; margin-top: 4px; }
+    #saved { color: #16a34a; font-weight: 600; visibility: hidden; }
+    .status { min-height: 18px; margin-top: 14px; font-weight: 600; }
+    .status.ok { color: #16a34a; }
+    .status.err { color: #dc2626; }
+  </style>
+</head>
+<body>
+  <h1>AniPresence Bridge</h1>
+  <p class="hint">These are usually filled in automatically by AniPresence at
+  startup (see <code>settings.json</code> in this folder). Only adjust them if
+  the app runs on a different port, or use <b>Test connection</b> to verify.</p>
+
+  <label for="port">Bridge port</label>
+  <input id="port" type="number" min="1024" max="65535">
+  <div class="hint">Default: 8793 (set in AniPresence's config.json if changed).</div>
+
+  <label for="token">Bridge token</label>
+  <input id="token" type="text" autocomplete="off" spellcheck="false">
+  <div class="hint">Copy from the AniPresence log line starting
+  “Browser-extension bridge listening on 127.0.0.1:…”.</div>
+
+  <button id="save">Save</button>
+  <button id="test" type="button">Test connection</button>
+  <div id="status" class="status"></div>
+  <span id="saved">Saved.</span>
+
+  <script src="options.js"></script>
+</body>
+</html>
