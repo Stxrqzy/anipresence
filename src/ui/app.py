@@ -1388,66 +1388,6 @@ class MainWindow(QMainWindow):
 
         c_layout.addWidget(self._sep())
 
-        c_layout.addWidget(self._field_label("DISCORD APPLICATION ID"))
-        id_row = QHBoxLayout()
-        id_row.setSpacing(8)
-        self.app_id_edit = QLineEdit()
-        self.app_id_edit.setPlaceholderText("Paste your Application ID")
-        self.app_id_edit.setText(self.cfg.data.discord_application_id)
-        id_row.addWidget(self.app_id_edit, 1)
-        get_id_btn = QPushButton("Get ID")
-        get_id_btn.setObjectName("ghost")
-        get_id_btn.setToolTip("Open the Discord Developer Portal")
-        get_id_btn.clicked.connect(
-            lambda: webbrowser.open("https://discord.com/developers/applications")
-        )
-        id_row.addWidget(get_id_btn)
-        c_layout.addLayout(id_row)
-
-        self.broadcast_combo = QComboBox()
-        self.broadcast_combo.addItems(["Discord pipe", "Vencord bridge", "Both"])
-        self.broadcast_combo.setToolTip(
-            "Where to announce your activity. 'Discord pipe' uses the local RPC "
-            "connection (visible to you; others only if your app is verified). "
-            "'Vencord bridge' posts to the bundled Vencord userplugin so friends "
-            "see it without verification; 'Both' sends to both."
-        )
-        broadcast_row = QHBoxLayout()
-        broadcast_row.setSpacing(8)
-        broadcast_label = QLabel("Broadcast")
-        broadcast_label.setObjectName("sectionLabel")
-        broadcast_row.addWidget(broadcast_label)
-        broadcast_row.addWidget(self.broadcast_combo, 1)
-        c_layout.addLayout(broadcast_row)
-
-        c_layout.addWidget(self._sep())
-
-        grid = QHBoxLayout()
-        grid.setSpacing(14)
-
-        col1 = QVBoxLayout()
-        col1.setSpacing(6)
-        col1.addWidget(self._field_label("BROWSER"))
-        self.browser_combo = QComboBox()
-        self.browser_combo.addItems(["Chrome", "Brave", "Edge", "Opera"])
-        col1.addWidget(self.browser_combo)
-
-        col2 = QVBoxLayout()
-        col2.setSpacing(6)
-        col2.addWidget(self._field_label("POLL INTERVAL (S)"))
-        self.interval_spin = QSpinBox()
-        self.interval_spin.setRange(2, 60)
-        self.interval_spin.setValue(int(self.cfg.data.poll_interval_seconds))
-        col2.addWidget(self.interval_spin)
-        col2.addWidget(self._field_label(""))
-        col2.addStretch(1)
-
-        grid.addLayout(col1, 1)
-        grid.addLayout(col2, 1)
-        c_layout.addLayout(grid)
-
-        c_layout.addWidget(self._sep())
-
         c_layout.addWidget(self._field_label("OPEN A SITE AS PWA"))
         pwa_row = QHBoxLayout()
         pwa_row.setSpacing(8)
@@ -1704,6 +1644,75 @@ class MainWindow(QMainWindow):
         reset_row.addWidget(reset_btn)
         hk.addLayout(reset_row)
         layout.addWidget(hotkeys)
+
+        # -- Discord & browser --------------------------------------------
+        conn = QFrame()
+        conn.setObjectName("card")
+        cc = QVBoxLayout(conn)
+        cc.setContentsMargins(self._pad, self._pad, self._pad, self._pad)
+        cc.setSpacing(10)
+        cc.addWidget(self._field_label("DISCORD & BROWSER"))
+
+        cc.addWidget(self._field_label("DISCORD APPLICATION ID"))
+        id_row = QHBoxLayout()
+        id_row.setSpacing(8)
+        self.app_id_edit = QLineEdit()
+        self.app_id_edit.setPlaceholderText("Paste your Application ID")
+        self.app_id_edit.setText(self.cfg.data.discord_application_id)
+        id_row.addWidget(self.app_id_edit, 1)
+        get_id_btn = QPushButton("Get ID")
+        get_id_btn.setObjectName("ghost")
+        get_id_btn.setToolTip("Open the Discord Developer Portal")
+        get_id_btn.clicked.connect(
+            lambda: webbrowser.open("https://discord.com/developers/applications")
+        )
+        id_row.addWidget(get_id_btn)
+        cc.addLayout(id_row)
+
+        broadcast_row = QHBoxLayout()
+        broadcast_row.setSpacing(8)
+        broadcast_label = QLabel("Broadcast")
+        broadcast_label.setObjectName("sectionLabel")
+        broadcast_row.addWidget(broadcast_label)
+        self.broadcast_combo = QComboBox()
+        self.broadcast_combo.addItems(["Discord pipe", "Vencord bridge", "Both"])
+        self.broadcast_combo.setToolTip(
+            "Where to announce your activity. 'Discord pipe' uses the local RPC "
+            "connection (visible to you; others only if your app is verified). "
+            "'Vencord bridge' posts to the bundled Vencord userplugin so friends "
+            "see it without verification; 'Both' sends to both."
+        )
+        broadcast_row.addWidget(self.broadcast_combo, 1)
+        cc.addLayout(broadcast_row)
+
+        cc.addWidget(self._sep())
+
+        grid = QHBoxLayout()
+        grid.setSpacing(14)
+        col1 = QVBoxLayout()
+        col1.setSpacing(6)
+        col1.addWidget(self._field_label("BROWSER"))
+        self.browser_combo = QComboBox()
+        self.browser_combo.addItems(["Chrome", "Brave", "Edge", "Opera"])
+        self.browser_combo.setToolTip("Which browser to launch/connect to.")
+        col1.addWidget(self.browser_combo)
+
+        col2 = QVBoxLayout()
+        col2.setSpacing(6)
+        col2.addWidget(self._field_label("POLL INTERVAL (S)"))
+        self.interval_spin = QSpinBox()
+        self.interval_spin.setRange(2, 60)
+        self.interval_spin.setValue(int(self.cfg.data.poll_interval_seconds))
+        self.interval_spin.setToolTip(
+            "How often the controller re-checks the player for changes."
+        )
+        col2.addWidget(self.interval_spin)
+        col2.addStretch(1)
+
+        grid.addLayout(col1, 1)
+        grid.addLayout(col2, 1)
+        cc.addLayout(grid)
+        layout.addWidget(conn)
 
         # -- Misc settings --------------------------------------------------
         misc = QFrame()

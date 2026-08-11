@@ -63,8 +63,9 @@ from the page title.
   resumes detection, `Ctrl+Alt+X` clears the presence, `Ctrl+Alt+N` opens the
   next episode. All four are **reassignable** from the Settings tab (click a
   shortcut, press the new combination; Esc cancels; Reset restores the defaults).
-- **Settings tab** — a dedicated page for global-hotkey assignment plus the
-  less-common knobs: minimum match score, AniList cache lifetime, the Chrome
+- **Settings tab** — a dedicated page for global-hotkey assignment, the Discord
+  application ID, broadcast method, browser selection and poll interval, plus
+  the less-common knobs: minimum match score, AniList cache lifetime, the Chrome
   debugging port, and the paused / no-video presence behaviours.
 
 ---
@@ -213,7 +214,8 @@ into that channel:
 
 1. Copy the `vencord-plugin\anipresence\` folder into Vencord's
    `src\userplugins\` and rebuild Vencord (`pnpm build`).
-2. In the app (Controls), set **Broadcast** to `Vencord bridge` or `Both`.
+2. In the app (Settings → Discord & browser), set **Broadcast** to `Vencord
+   bridge` or `Both`.
 3. The plugin opens a tiny local server on `127.0.0.1:6339` and dispatches a
    `LOCAL_ACTIVITY_UPDATE` whenever AniPresence posts a new activity, which
    Vencord turns into a presence visible to other users.
@@ -225,8 +227,8 @@ grayed).
 ### 2. Prepare the browser
 
 AniPresence needs a Chromium-based browser (Chrome or Brave) exposed on its
-debugging port. Pick which one in the UI (`Controls → Browser`) or via the
-`browser` config key. Two options:
+debugging port. Pick which one in the UI (`Settings → Discord & browser`) or via
+the `browser` config key. Two options:
 
 - **Let the app do it.** Keep `chrome_auto_launch = true` in the config. When
   no debug port is found the app launches Chrome itself:
