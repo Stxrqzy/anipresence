@@ -107,8 +107,12 @@ QPushButton#ghost { background-color: rgba(38, 42, 55, 0.66); color: #cbd0de; bo
 QPushButton#ghost:hover { background-color: rgba(48, 54, 74, 0.85); color: #ffffff; }
 QPushButton#ghost[recording="true"] { background-color: rgba(124, 92, 255, 0.22); color: #ffffff; border-color: #8b6cff; }
 QScrollArea#continueScroller { background: transparent; }
-QToolButton#continueTile { background-color: rgba(38, 42, 55, 0.6); color: #e7e9ee; border: 1px solid rgba(139, 148, 175, 0.12); border-radius: 10px; padding: 4px 12px; font-weight: 600; }
-QToolButton#continueTile:hover { background-color: rgba(48, 54, 74, 0.85); border-color: rgba(139, 148, 175, 0.28); }
+QFrame#continueTile { background-color: rgba(38, 42, 55, 0.6); border: 1px solid rgba(139, 148, 175, 0.12); border-radius: 10px; }
+QFrame#continueTile:hover { background-color: rgba(48, 54, 74, 0.85); border-color: rgba(139, 148, 175, 0.28); }
+QToolButton#continueTileButton { background: transparent; border: none; color: #e7e9ee; font-weight: 600; padding: 4px 6px 4px 12px; }
+QToolButton#continueTileButton:hover { color: #ffffff; }
+QToolButton#continueTileClose { background: transparent; border: none; color: #8a91a8; font-weight: 700; padding: 4px 10px; border-radius: 8px; font-size: 12px; }
+QToolButton#continueTileClose:hover { color: #f87171; }
 QCheckBox { spacing: 9px; color: #d6d9e3; }
 QCheckBox::indicator { width: 16px; height: 16px; border-radius: 5px; border: 1.5px solid #3a4057; background-color: rgba(23, 25, 35, 0.8); }
 QCheckBox::indicator:hover { border-color: #8b6cff; }
@@ -177,8 +181,12 @@ QPushButton#ghost { background-color: rgba(236, 238, 243, 0.78); color: #3b4252;
 QPushButton#ghost:hover { background-color: rgba(226, 229, 236, 0.95); color: #111318; }
 QPushButton#ghost[recording="true"] { background-color: rgba(124, 92, 255, 0.22); color: #1c1e26; border-color: #7c5cff; }
 QScrollArea#continueScroller { background: transparent; }
-QToolButton#continueTile { background-color: rgba(236, 238, 243, 0.78); color: #1c1e26; border: 1px solid rgba(0, 0, 0, 0.07); border-radius: 10px; padding: 4px 12px; font-weight: 600; }
-QToolButton#continueTile:hover { background-color: rgba(226, 229, 236, 0.95); border-color: rgba(0, 0, 0, 0.14); }
+QFrame#continueTile { background-color: rgba(236, 238, 243, 0.78); border: 1px solid rgba(0, 0, 0, 0.07); border-radius: 10px; }
+QFrame#continueTile:hover { background-color: rgba(226, 229, 236, 0.95); border-color: rgba(0, 0, 0, 0.14); }
+QToolButton#continueTileButton { background: transparent; border: none; color: #1c1e26; font-weight: 600; padding: 4px 6px 4px 12px; }
+QToolButton#continueTileButton:hover { color: #000000; }
+QToolButton#continueTileClose { background: transparent; border: none; color: #6b7280; font-weight: 700; padding: 4px 10px; border-radius: 8px; font-size: 12px; }
+QToolButton#continueTileClose:hover { color: #dc2626; }
 QCheckBox { spacing: 9px; color: #374151; }
 QCheckBox::indicator { width: 16px; height: 16px; border-radius: 5px; border: 1.5px solid #c6cbd6; background-color: rgba(255, 255, 255, 0.8); }
 QCheckBox::indicator:hover { border-color: #7c5cff; }
@@ -232,7 +240,9 @@ QLabel#titleLabel { font-size: 22px; }
 QFrame#card, QFrame#controls, QFrame#continueStrip { border-radius: 12px; }
 QLineEdit, QSpinBox, QComboBox { padding: 4px 8px; }
 QTabBar::tab { padding: 6px 16px; }
-QToolButton#continueTile { padding: 3px 9px; }
+QFrame#continueTile { border-radius: 8px; }
+QToolButton#continueTileButton { padding: 3px 4px 3px 8px; }
+QToolButton#continueTileClose { padding: 3px 7px; }
 """
 
 
@@ -716,7 +726,11 @@ class MainWindow(QMainWindow):
         self._cover_requested = False
         self._cover_pixmap = None
         self._ambient = None          # cinematic backdrop QLabel (full-window)
-        self._ambient_pixmap = None   # cover art used for the backdrop
+        self._banner_url = ""         # AniList banner used as the HD backdrop source
+        self._backdrop_pixmap = None  # high-res backdrop source (banner preferred)
+        self._banner_fetching = False
+        self._ambient_src_version = 0  # bumps whenever the backdrop source changes
+        self._ambient_cache_key = None
         self._left_pane = None
         self._splitter = None
         self._tray = None
@@ -1288,21 +1302,64 @@ class MainWindow(QMainWindow):
         card.setObjectName("card")
         card.setMinimumWidth(420)
         self._left_pane = card
-        card_layout = QHBoxLayout(card)
+        card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(self._pad, self._pad, self._pad, self._pad)
-        card_layout.setSpacing(18)
+        card_layout.setSpacing(14)
+
+        # Top row: cover on the left, every action button to its right.
+        top_row = QHBoxLayout()
+        top_row.setSpacing(18)
 
         self.cover_label = QLabel()
         self.cover_label.setObjectName("cover")
         self.cover_label.setFixedSize(150, 210)
         self.cover_label.setAlignment(Qt.AlignCenter)
-        card_layout.addWidget(self.cover_label, 0, Qt.AlignTop)
+        top_row.addWidget(self.cover_label, 0, Qt.AlignTop)
         self._cover_spinner = _Spinner()
         self._cover_spinner.setParent(self.cover_label)
         self._cover_spinner.set_color(self.cfg.data.accent)
         self._cover_spinner.hide()
         self._place_cover_spinner()
 
+        button_col = QVBoxLayout()
+        button_col.setSpacing(8)
+        self.open_site_btn = QPushButton("Open Site")
+        self.open_site_btn.setObjectName("ghost")
+        self.open_site_btn.setEnabled(False)
+        self.open_pwa_btn = QPushButton("Launch as PWA")
+        self.open_pwa_btn.setObjectName("ghost")
+        self.open_pwa_btn.setToolTip(
+            "Reopen this anime in a standalone app-style window of your browser."
+        )
+        self.open_pwa_btn.setEnabled(False)
+        self.open_anilist_btn = QPushButton("Open AniList")
+        self.open_anilist_btn.setObjectName("ghost")
+        self.open_anilist_btn.setToolTip("Open this anime's AniList page")
+        self.open_anilist_btn.setEnabled(False)
+        self.fix_match_btn = QPushButton("Wrong match?")
+        self.fix_match_btn.setObjectName("ghost")
+        self.fix_match_btn.setToolTip(
+            "Tell AniPresence the correct title/episode so it stops "
+            "misidentifying this page (remembered for next time)."
+        )
+        self.fix_match_btn.setEnabled(False)
+        self.next_ep_btn = QPushButton("Next episode")
+        self.next_ep_btn.setObjectName("ghost")
+        self.next_ep_btn.setToolTip("Open the next episode of this anime in your browser.")
+        self.next_ep_btn.setEnabled(False)
+        self.copy_url_btn = QPushButton("Copy URL")
+        self.copy_url_btn.setObjectName("ghost")
+        self.copy_url_btn.setToolTip("Copy the current page URL to the clipboard.")
+        self.copy_url_btn.setEnabled(False)
+        for _btn in (self.open_site_btn, self.open_pwa_btn, self.open_anilist_btn,
+                     self.fix_match_btn, self.next_ep_btn, self.copy_url_btn):
+            _btn.setMinimumWidth(132)
+            button_col.addWidget(_btn)
+        button_col.addStretch(1)
+        top_row.addLayout(button_col, 0)
+        card_layout.addLayout(top_row)
+
+        # Bottom section: title + playback bar, spanning the full card width.
         info = QVBoxLayout()
         info.setSpacing(7)
         self.episode_label = QLabel("")
@@ -1334,45 +1391,7 @@ class MainWindow(QMainWindow):
         time_row.addWidget(self.time_total)
         info.addLayout(time_row)
 
-        button_row = _FlowLayout()
-        button_row.setSpacing(8)
-        self.open_site_btn = QPushButton("Open Site")
-        self.open_site_btn.setObjectName("ghost")
-        self.open_site_btn.setEnabled(False)
-        self.open_pwa_btn = QPushButton("Launch as PWA")
-        self.open_pwa_btn.setObjectName("ghost")
-        self.open_pwa_btn.setToolTip(
-            "Reopen this anime in a standalone app-style window of your browser."
-        )
-        self.open_pwa_btn.setEnabled(False)
-        self.open_anilist_btn = QPushButton("Open AniList")
-        self.open_anilist_btn.setObjectName("ghost")
-        self.open_anilist_btn.setToolTip("Open this anime's AniList page")
-        self.open_anilist_btn.setEnabled(False)
-        self.fix_match_btn = QPushButton("Wrong match?")
-        self.fix_match_btn.setObjectName("ghost")
-        self.fix_match_btn.setToolTip(
-            "Tell AniPresence the correct title/episode so it stops "
-            "misidentifying this page (remembered for next time)."
-        )
-        self.fix_match_btn.setEnabled(False)
-        self.next_ep_btn = QPushButton("Next episode")
-        self.next_ep_btn.setObjectName("ghost")
-        self.next_ep_btn.setToolTip("Open the next episode of this anime in your browser.")
-        self.next_ep_btn.setEnabled(False)
-        self.copy_url_btn = QPushButton("Copy URL")
-        self.copy_url_btn.setObjectName("ghost")
-        self.copy_url_btn.setToolTip("Copy the current page URL to the clipboard.")
-        self.copy_url_btn.setEnabled(False)
-        button_row.addWidget(self.open_site_btn)
-        button_row.addWidget(self.open_pwa_btn)
-        button_row.addWidget(self.open_anilist_btn)
-        button_row.addWidget(self.fix_match_btn)
-        button_row.addWidget(self.next_ep_btn)
-        button_row.addWidget(self.copy_url_btn)
-        info.addLayout(button_row)
-        info.addStretch(1)
-        card_layout.addLayout(info, 1)
+        card_layout.addLayout(info)
         left_col.addWidget(card, 5)
 
         # Live mockup of the Discord activity card, updated in real time.
@@ -1595,11 +1614,20 @@ class MainWindow(QMainWindow):
             if not url:
                 continue
             label = f"Ep {ep} · {title}" if ep else title
+
+            tile = QFrame()
+            tile.setObjectName("continueTile")
+            tile.setCursor(Qt.PointingHandCursor)
+            row = QHBoxLayout(tile)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(0)
+
             btn = QToolButton()
+            btn.setObjectName("continueTileButton")
             btn.setText(label)
-            btn.setObjectName("continueTile")
             btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
             btn.setAutoRaise(True)
+            btn.setCursor(Qt.PointingHandCursor)
             btn.setToolTip(f"Resume '{title}'" + (f" at episode {ep}" if ep else "") + ("" if self.cfg.data.privacy_mode else f"\n{url}"))
             btn.clicked.connect(lambda _=False, u=url: webbrowser.open(u))
             cover = e.get("cover") or ""
@@ -1613,11 +1641,29 @@ class MainWindow(QMainWindow):
                     if cover not in self._continue_icon_fetching:
                         self._continue_icon_fetching.add(cover)
                         self._nam.get(QNetworkRequest(QUrl(cover)))
-            self._continue_layout.insertWidget(self._continue_layout.count() - 1, btn)
+            row.addWidget(btn, 1)
+
+            close = QToolButton()
+            close.setObjectName("continueTileClose")
+            close.setText("✕")
+            close.setToolTip("Remove from continue watching")
+            close.setCursor(Qt.PointingHandCursor)
+            close.clicked.connect(lambda _=False, t=title: self._remove_continue(t))
+            row.addWidget(close)
+
+            self._continue_layout.insertWidget(self._continue_layout.count() - 1, tile)
 
         # Tiles with covers that haven't arrived yet get fetched lazily in
         # _on_cover_reply, which swaps the icon in place.
         frame.setVisible(bool(self._continue_layout.count() > 1))
+
+    def _remove_continue(self, title):
+        """Remove one title from the continue-watching strip."""
+        self.controller.remove_continue_entry(title)
+        self._continue_fingerprint = None  # force a rebuild of the strip
+        self._refresh_continue()
+        if getattr(self, "_stat_cards", None):
+            self._refresh_stats()
 
     # --------------------------------------------------------------- stats
     def _build_stats_page(self, margin, compact):
@@ -2193,9 +2239,40 @@ class MainWindow(QMainWindow):
         self._chart_view.setChart(chart)
 
     def _on_tab_changed(self, index):
+        self._tab_anim_stop()
         self.stack.setCurrentIndex(index)
         if index == self._stats_tab_index:
             self._refresh_stats()
+        self._animate_tab_in(self.stack.currentWidget())
+
+    def _animate_tab_in(self, widget):
+        """Fade the incoming tab in from transparent (skipped pre-show)."""
+        if not self.isVisible():
+            return
+        effect = QGraphicsOpacityEffect(widget)
+        widget.setGraphicsEffect(effect)
+        anim = QPropertyAnimation(effect, b"opacity", self)
+        anim.setDuration(180)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+        anim.finished.connect(lambda: self._finish_tab_anim(widget, anim))
+        anim.start()
+        self._tab_anim = anim  # keep a ref so GC can't kill it mid-flight
+
+    def _finish_tab_anim(self, widget, anim):
+        """Drop the transient opacity effect once the fade completes."""
+        if getattr(self, "_tab_anim", None) is anim:
+            self._tab_anim = None
+        if widget.graphicsEffect() is not None:
+            widget.setGraphicsEffect(None)  # Qt takes ownership and deletes it
+        anim.deleteLater()
+
+    def _tab_anim_stop(self):
+        anim = getattr(self, "_tab_anim", None)
+        if anim is not None:
+            anim.stop()
+            self._tab_anim = None
 
     def _on_recent_also_stats(self, _entries):
         """Keep the Stats tab live while it's the active tab."""
@@ -2341,6 +2418,9 @@ class MainWindow(QMainWindow):
     def _on_cinematic_toggled(self, on):
         self.cfg.set(cinematic_backdrop=on)
         self._apply_stylesheet()
+        self._update_ambient()
+        if on and self._banner_url and self._backdrop_pixmap is None:
+            self._request_banner(self._banner_url)
 
     def _on_auto_accent_toggled(self, on):
         self.cfg.set(auto_accent=on)
@@ -2699,6 +2779,11 @@ class MainWindow(QMainWindow):
                 )
             )
 
+        banner = payload.get("banner_url") or ""
+        if banner != self._banner_url:
+            self._banner_url = banner
+            self._request_banner(banner)
+
         self._maybe_auto_accent()
         self._refresh_continue()
         self._update_preview()
@@ -2838,17 +2923,21 @@ class MainWindow(QMainWindow):
         self._apply_stylesheet()
 
     def _update_ambient(self):
-        """Fill the window behind the UI with the cover art (cinematic mode).
+        """Fill the window behind the UI with art (cinematic mode).
 
-        Rests the pixmap to a cover-crop fill every resize; the QSS makes the
-        base window fills transparent so this layer peeks through. The render
-        is scaled by the device-pixel-ratio so it stays crisp on HiDPI displays.
+        Prefers the wide, high-resolution AniList banner when one is available;
+        otherwise the portrait cover is upscaled through a soft blur + darken so
+        it reads as an intentional backdrop instead of a pixelated blow-up. The
+        rendered pixmap is cached per window size so resizing is cheap.
         """
         ambient = self._ambient
         if ambient is None:
             return
-        cover = self._cover_pixmap
-        if not self.cfg.data.cinematic_backdrop or cover is None or cover.isNull():
+        if not self.cfg.data.cinematic_backdrop:
+            ambient.hide()
+            return
+        source = self._backdrop_pixmap or self._cover_pixmap
+        if source is None or source.isNull():
             ambient.hide()
             return
         w = self.width()
@@ -2857,16 +2946,43 @@ class MainWindow(QMainWindow):
             ambient.hide()
             return
         dpr = self.devicePixelRatio() or 1.0
-        scaled = cover.scaled(
-            int(w * 2 * dpr), int(h * 2 * dpr),
-            Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation,
-        )
-        x = (scaled.width() - int(w * dpr)) // 2
-        y = (scaled.height() - int(h * dpr)) // 2
-        ambient.setPixmap(scaled.copy(x, y, int(w * dpr), int(h * dpr)))
+        blurred = self._backdrop_pixmap is None  # cover upscales get softened
+        key = (w, h, dpr, self._ambient_src_version, blurred)
+        if key != getattr(self, "_ambient_cache_key", None):
+            self._ambient_cache_key = key
+            tw, th = int(w * dpr), int(h * dpr)
+            ambient.setPixmap(self._render_ambient(source, tw, th, blurred))
         ambient.setGeometry(0, 0, w, h)
         ambient.lower()
         ambient.show()
+
+    def _render_ambient(self, source, tw, th, blurred):
+        """Scale *source* onto a ``tw x th`` device-pixel canvas.
+
+        Banner sources are fit whole inside the window (centered, letterboxed)
+        so the backdrop isn't a zoomed crop. Cover fallbacks collapse and
+        re-expand (a cheap gaussian-style blur) into a full-bleed darkened fill
+        so a small portrait never looks jagged.
+        """
+        out = QPixmap(tw, th)
+        out.fill(Qt.black)
+        p = QPainter(out)
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
+        if blurred:
+            small = source.scaled(
+                max(1, tw // 12), max(1, th // 12),
+                Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation,
+            )
+            src = small.scaled(tw, th, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+            x = (src.width() - tw) // 2
+            y = (src.height() - th) // 2
+            p.drawPixmap(0, 0, src, x, y, tw, th)
+            p.fillRect(out.rect(), QColor(0, 0, 0, 150))  # keep UI text readable
+        else:
+            src = source.scaled(tw, th, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            p.drawPixmap((tw - src.width()) // 2, (th - src.height()) // 2, src)
+        p.end()
+        return out
 
     # -------------------------------------------------------------- tray
     def _tray_base_pixmap(self):
@@ -3112,6 +3228,7 @@ class MainWindow(QMainWindow):
             pixmap = QPixmap(str(cached))
             if not pixmap.isNull():
                 self._cover_pixmap = pixmap
+                self._ambient_src_version += 1
                 self.cover_label.setPixmap(
                     pixmap.scaled(self.cover_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 )
@@ -3123,6 +3240,51 @@ class MainWindow(QMainWindow):
         self._cover_spinner.show()
         request = QNetworkRequest(QUrl(url))
         self._nam.get(request)
+
+    def _request_banner(self, url):
+        """Fetch the wide AniList banner for the cinematic backdrop (cached)."""
+        if not url:
+            if self._backdrop_pixmap is not None:
+                self._backdrop_pixmap = None
+                self._ambient_src_version += 1
+            self._update_ambient()
+            return
+        cached = self._cover_cache_path(url)
+        if cached.exists():
+            pixmap = QPixmap(str(cached))
+            if not pixmap.isNull():
+                self._backdrop_pixmap = pixmap
+                self._ambient_src_version += 1
+                self._update_ambient()
+                return
+        if self._banner_fetching:
+            return
+        self._banner_fetching = True
+        # Dedicated manager so the reply never routes through _on_cover_reply.
+        nam = QNetworkAccessManager(self)
+        req = QNetworkRequest(QUrl(url))
+        reply = nam.get(req)
+
+        def on_reply():
+            self._banner_fetching = False
+            if reply.error() == QNetworkReply.NoError:
+                data = bytes(reply.readAll())
+                pixmap = QPixmap()
+                if pixmap.loadFromData(data):
+                    try:
+                        if not self._cover_cache_dir.exists():
+                            self._cover_cache_dir.mkdir(parents=True, exist_ok=True)
+                        cached = self._cover_cache_path(url)
+                        if not cached.exists():
+                            cached.write_bytes(data)
+                    except OSError:
+                        pass
+                    self._backdrop_pixmap = pixmap
+                    self._ambient_src_version += 1
+                    self._update_ambient()
+            reply.deleteLater()
+
+        reply.finished.connect(on_reply)
 
     def _on_cover_reply(self, reply):
         orig = reply.request().url().toString()
@@ -3216,6 +3378,7 @@ class MainWindow(QMainWindow):
         if not pixmap.loadFromData(data):
             return
         self._cover_pixmap = pixmap
+        self._ambient_src_version += 1
         size = self.cover_label.size()
         self.cover_label.setPixmap(
             pixmap.scaled(size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
@@ -3244,15 +3407,19 @@ class MainWindow(QMainWindow):
             sp.move((w - size.width()) // 2, (h - size.height()) // 2)
 
     def _update_cover_size(self):
-        """Shrink the cover art so the text column stays readable on narrow panes."""
+        """Size the cover so the stacked buttons beside it never collide.
+
+        The buttons sit in a ~132px column to the right, so the cover can grow
+        much wider than before (capped by the pane width minus that column).
+        """
         pane = self._left_pane
         if pane is None:
             return
         avail = pane.width()
         if avail <= 0:
             return
-        base = 185 if self.cfg.data.compact else 230
-        reserve = 300 if self.cfg.data.compact else 300
+        base = 210 if self.cfg.data.compact else 260
+        reserve = 165 if self.cfg.data.compact else 165
         width = min(base, max(70, avail - reserve))
         height = round(width * 7 / 5)
         if self.cover_label.width() == width:
@@ -3392,6 +3559,8 @@ class MainWindow(QMainWindow):
         self.cover_label.clear()
         self.cover_label.setText("Manual")
         self._cover_pixmap = None
+        self._backdrop_pixmap = None
+        self._ambient_src_version += 1
         self._cover_spinner.hide()
         self.open_site_btn.setEnabled(False)
         self.open_pwa_btn.setEnabled(False)
@@ -3514,6 +3683,9 @@ class MainWindow(QMainWindow):
         self.cover_label.clear()
         self.cover_label.setText("Cover")
         self._cover_pixmap = None
+        self._backdrop_pixmap = None
+        self._banner_url = ""
+        self._ambient_src_version += 1
         self._cover_spinner.hide()
         self.open_site_btn.setEnabled(False)
         self.open_pwa_btn.setEnabled(False)

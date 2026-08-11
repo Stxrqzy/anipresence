@@ -166,8 +166,14 @@ class Controller:
         if self.cfg.data.extension_enabled:
             self.extension.start()
             if self.extension.running:
+                # A configured port of 0 means "OS-assigned ephemeral", so the
+                # bridge actually listens on the bound_port. Persist that real
+                # port so restarts reuse it and settings.json stays stable.
+                bound = self.extension.bound_port
+                if self.cfg.data.extension_port in (0, None, "") and bound:
+                    self.cfg.set(extension_port=bound)
                 self.bridge.log.emit(
-                    f"Browser-extension bridge listening on 127.0.0.1:{self.extension.bound_port} "
+                    f"Browser-extension bridge listening on 127.0.0.1:{bound} "
                     f"(token: {self.extension.token})."
                 )
                 self._provision_extension_config()
@@ -204,7 +210,7 @@ class Controller:
             candidates.append(Path(__file__).resolve().parents[2] / "browser-extension")
 
         payload = json.dumps(
-            {"bridgePort": self.extension.port, "bridgeToken": self.extension.token},
+            {"bridgePort": self.extension.bound_port, "bridgeToken": self.extension.token},
             indent=2,
         )
         written = []
@@ -739,6 +745,11 @@ class Controller:
         self.recent.remove(entry)
         self.bridge.recent.emit(self.recent.items())
 
+    def remove_continue_entry(self, title):
+        """Drop *title* from continue watching and the watch-time stats."""
+        self.watchlog.remove_title(title)
+        self.bridge.recent.emit(self.recent.items())
+
     def clear_recent(self):
         """Delete all history entries and refresh the UI list."""
         self.recent.clear()
@@ -932,6 +943,7 @@ class Controller:
             "paused": video.paused,
             "cover_url": media.cover_extra_large or media.cover_large if media else "",
             "cover_extra_url": media.cover_extra_large if media else "",
+            "banner_url": media.banner if media else "",
             "anilist_url": media.site_url if media else "",
             "anilist_title": title,
             "match_confidence": self._current.confidence,

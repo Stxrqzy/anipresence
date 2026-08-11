@@ -90,7 +90,9 @@ def test_continue_strip_selectors_in_both_themes():
         qss = build_theme_qss(theme)
         assert "QFrame#continueStrip" in qss
         assert "QScrollArea#continueScroller" in qss
-        assert "QToolButton#continueTile" in qss
+        assert "QFrame#continueTile" in qss
+        assert "QToolButton#continueTileButton" in qss
+        assert "QToolButton#continueTileClose" in qss
 
 
 def test_selected_tab_uses_accent():
