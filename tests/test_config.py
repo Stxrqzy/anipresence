@@ -91,3 +91,11 @@ def test_redact_urls():
     result = redact_urls(text)
     assert "https://example.com" not in result
     assert result.count("[url]") == 2
+
+
+def test_cinematic_backdrop_defaults_and_roundtrip(tmp_path):
+    path = tmp_path / "config.json"
+    cfg = ConfigManager(str(path))
+    assert cfg.data.cinematic_backdrop is True
+    cfg.set(cinematic_backdrop=False)
+    assert ConfigManager(str(path)).data.cinematic_backdrop is False

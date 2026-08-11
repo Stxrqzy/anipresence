@@ -58,7 +58,10 @@ def main():
     from src.fonts import register_fonts
     register_fonts()  # load the embedded Figtree UI font
     app.setStyleSheet(
-        build_theme_qss(resolved_theme, cfg.data.accent, cfg.data.compact, cfg.data.mica_backdrop)
+        build_theme_qss(
+            resolved_theme, cfg.data.accent, cfg.data.compact,
+            cfg.data.mica_backdrop or cfg.data.cinematic_backdrop,
+        )
     )
 
     # Branded splash: logo + loading bar while the worker and window come up.

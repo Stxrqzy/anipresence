@@ -51,6 +51,17 @@ from the page title.
 - **Windows 11 Mica** — frosted-glass backdrop (Mica on Windows 11, acrylic on
   Windows 10) with translucent panels and a theme-matched title bar; presence is
   cleared on quit so nothing lingers in Discord.
+- **Cinematic backdrop** — dims the current cover art behind the whole window
+  for a movie-theatre look (toggle under Controls). Pairs with Mica for a
+  frosted-glass key-art glow.
+- **Rich Presence preview** — a live mockup of your Discord activity card
+  (details, state, elapsed clock, buttons) updates under the dashboard as you
+  watch.
+- **Adaptive tray icon** — the tray logo grows a progress ring around the cover
+  while something plays, and the tooltip shows title · episode · elapsed.
+- **Global hotkeys** — `Ctrl+Alt+A` toggles the window, `Ctrl+Alt+P` pauses/
+  resumes detection, `Ctrl+Alt+X` clears the presence, `Ctrl+Alt+N` opens the
+  next episode.
 
 ---
 
@@ -345,6 +356,7 @@ defaults). All keys:
 | `overrides` | `{}` | Per-page "wrong match" corrections (`url -> {title, episode}`) |
 | `idle_presence` | `false` | Show a "Browsing anime" presence when nothing is playing |
 | `mica_backdrop` | `true` | Frosted-glass backdrop (Mica on Win 11, acrylic on Win 10) |
+| `cinematic_backdrop` | `true` | Dim the cover art behind the whole window (cinematic look) |
 | `extension_enabled` | `true` | Enable the localhost browser-extension bridge |
 | `extension_port` | `8793` | Port the browser extension reports to |
 | `extension_token` | `""` | Bridge token (auto-generated on first run; set it in the extension options) |

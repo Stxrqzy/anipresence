@@ -6,22 +6,24 @@ scrollback log. The worker thread updates it exclusively through signals.
 """
 import hashlib
 import sys
+import time
 import webbrowser
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from PySide6.QtCore import (
-    QAbstractNativeEventFilter, QAbstractAnimation, QEasingCurve, QPoint, QPropertyAnimation,
-    QRect, QSignalBlocker, QSize, Qt, QTimer, QUrl,
+    QAbstractNativeEventFilter, QAbstractAnimation, QEasingCurve, QEvent, QPoint,
+    QPropertyAnimation, QRect, QRectF, QSignalBlocker, QSize, Qt, QTimer, QUrl,
 )
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QColorDialog, QComboBox, QDialog, QDialogButtonBox,
-    QFormLayout, QFrame, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLayout,
-    QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
-    QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSpinBox, QStackedWidget,
-    QSystemTrayIcon, QTabBar, QVBoxLayout, QWidget,
+    QFormLayout, QFrame, QGraphicsOpacityEffect, QGridLayout, QHBoxLayout,
+    QInputDialog, QLabel, QLayout, QLineEdit, QListWidget, QListWidgetItem,
+    QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
+    QScrollArea, QSpinBox, QStackedWidget, QSystemTrayIcon, QTabBar, QVBoxLayout,
+    QWidget,
 )
 from PySide6.QtWidgets import QSizePolicy
 
@@ -37,6 +39,7 @@ from .. import __version__
 from ..config import APP_DIR, ConfigManager, redact_urls
 from ..core.controller import Controller
 from ..core.watchlog import format_hours
+from ..discord.rpc import format_seconds
 from ..theme import resolve_theme
 from ..ui.bridge import UiBridge
 from ..urlnav import increment_episode_url
@@ -64,6 +67,15 @@ QLabel#statValue { color: #ffffff; font-size: 22px; font-weight: 700; }
 QLabel#monogram { background-color: #7c5cff; color: #ffffff; border-radius: 10px; font-size: 16px; font-weight: 700; }
 QLabel#avatar { background-color: #3a4057; color: #e7e9ee; border-radius: 17px; font-size: 15px; font-weight: 700; }
 QLabel#cover { background-color: rgba(18, 20, 29, 0.62); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; color: #4b5268; }
+QLabel#ambient { background-color: transparent; }
+QFrame#preview { background-color: rgba(23, 25, 35, 0.66); border: 1px solid rgba(139, 148, 175, 0.16); border-radius: 16px; }
+QLabel#previewDot { color: #23a55a; font-size: 12px; }
+QLabel#previewApp { color: #ffffff; font-size: 13px; font-weight: 700; }
+QLabel#previewStatus { color: #8a91a8; font-size: 11px; font-weight: 600; }
+QLabel#previewTitle { font-size: 14px; font-weight: 650; color: #ffffff; }
+QLabel#previewState { color: #8a91a8; font-size: 12px; }
+QLabel#previewTime { color: #5a6178; font-size: 11px; }
+QLabel#previewButtons { color: #7c5cff; font-size: 11px; font-weight: 600; }
 QTabWidget::pane { border: none; background: transparent; }
 QTabBar { background: transparent; }
 QTabBar::tab { background-color: rgba(23, 25, 35, 0.45); border: 1px solid rgba(139, 148, 175, 0.14); border-bottom: none; border-top-left-radius: 10px; border-top-right-radius: 10px; padding: 8px 22px; margin-right: 5px; color: #9aa3bd; }
@@ -121,6 +133,15 @@ QLabel#statValue { color: #111318; font-size: 22px; font-weight: 700; }
 QLabel#monogram { background-color: #7c5cff; color: #ffffff; border-radius: 10px; font-size: 16px; font-weight: 700; }
 QLabel#avatar { background-color: #c6cbd6; color: #1c1e26; border-radius: 17px; font-size: 15px; font-weight: 700; }
 QLabel#cover { background-color: rgba(248, 249, 251, 0.7); border: 1px solid rgba(0, 0, 0, 0.08); border-radius: 10px; color: #9aa0b5; }
+QLabel#ambient { background-color: transparent; }
+QFrame#preview { background-color: rgba(255, 255, 255, 0.68); border: 1px solid rgba(0, 0, 0, 0.07); border-radius: 16px; }
+QLabel#previewDot { color: #15803d; font-size: 12px; }
+QLabel#previewApp { color: #111318; font-size: 13px; font-weight: 700; }
+QLabel#previewStatus { color: #6b7280; font-size: 11px; font-weight: 700; }
+QLabel#previewTitle { font-size: 14px; font-weight: 650; color: #111318; }
+QLabel#previewState { color: #6b7280; font-size: 12px; }
+QLabel#previewTime { color: #9aa0b5; font-size: 11px; }
+QLabel#previewButtons { color: #6a49e8; font-size: 11px; font-weight: 700; }
 QTabWidget::pane { border: none; background: transparent; }
 QTabBar { background: transparent; }
 QTabBar::tab { background-color: rgba(255, 255, 255, 0.45); border: 1px solid rgba(0, 0, 0, 0.06); border-bottom: none; border-top-left-radius: 10px; border-top-right-radius: 10px; padding: 8px 22px; margin-right: 5px; color: #6b7280; }
@@ -470,10 +491,10 @@ class _EdgeResizeFilter(QAbstractNativeEventFilter):
                 ]
 
             msg = MSG.from_address(int(message))
-            if msg.message == 0x0312:  # WM_HOTKEY (global Ctrl+Alt+A)
+            if msg.message == 0x0312:  # WM_HOTKEY (global hotkeys)
                 window = self._window()
                 if window is not None:
-                    window._toggle_visible()
+                    window._on_global_hotkey(int(msg.wParam))
                 return True, 0
             if msg.message != 0x84:  # WM_NCHITTEST
                 return False, 0
@@ -527,6 +548,8 @@ class MainWindow(QMainWindow):
         self._cover_url = ""
         self._cover_requested = False
         self._cover_pixmap = None
+        self._ambient = None          # cinematic backdrop QLabel (full-window)
+        self._ambient_pixmap = None   # cover art used for the backdrop
         self._left_pane = None
         self._splitter = None
         self._tray = None
@@ -534,6 +557,12 @@ class MainWindow(QMainWindow):
         self._prev_chrome_ok = None
         self._prev_discord_ok = None
         self._last_chrome_status = ""
+        self._tray_base_pm = None     # clean logo pixmap for progress-ring overlays
+        self._tray_fraction = None    # playback progress drawn as a ring on the icon
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setInterval(1000)
+        self._preview_timer.timeout.connect(self._tick_preview_elapsed)
+        self._preview_timer.start()
         self._nam = QNetworkAccessManager(self)
         self._nam.finished.connect(self._on_cover_reply)
         self._cover_cache_dir = APP_DIR / "covers"
@@ -582,6 +611,7 @@ class MainWindow(QMainWindow):
     def _build_tray(self):
         if not QSystemTrayIcon.isSystemTrayAvailable():
             return
+        self._tray_base_pm = None  # re-derive under the current accent
         self._tray = QSystemTrayIcon(app_icon(64, self.cfg.data.accent), self)
         menu = QMenu()
         show_act = menu.addAction("Show / Hide window")
@@ -749,33 +779,69 @@ class MainWindow(QMainWindow):
         QApplication.instance().installNativeEventFilter(self._resize_filter)
         self._register_hotkey()
 
-    _HOTKEY_ID = 0xAF01          # arbitrary app-private id
+    _HOTKEY_ID = 0xAF01          # toggle window
+    _HOTKEY_PAUSE_ID = 0xAF02    # toggle detection
+    _HOTKEY_CLEAR_ID = 0xAF03    # clear presence
+    _HOTKEY_NEXT_ID = 0xAF04     # next episode
     _HOTKEY_MODS = 0x0001 | 0x0002  # MOD_ALT | MOD_CONTROL
-    _HOTKEY_VK = 0x41             # 'A' -> Ctrl+Alt+A
+    _HOTKEY_VKS = {
+        _HOTKEY_ID: 0x41,             # 'A' -> Ctrl+Alt+A
+        _HOTKEY_PAUSE_ID: 0x50,       # 'P' -> Ctrl+Alt+P
+        _HOTKEY_CLEAR_ID: 0x58,       # 'X' -> Ctrl+Alt+X
+        _HOTKEY_NEXT_ID: 0x4E,        # 'N' -> Ctrl+Alt+N
+    }
 
     def _register_hotkey(self):
-        """Global Ctrl+Alt+A toggles the window from anywhere (Windows only)."""
-        self._hotkey_registered = False
+        """Global hotkeys: Ctrl+Alt+A toggle window, Ctrl+Alt+P toggle
+        detection, Ctrl+Alt+X clear presence, Ctrl+Alt+N next episode."""
+        self._hotkey_registered = {}
         try:
             import ctypes
-            self._hotkey_registered = bool(
-                ctypes.windll.user32.RegisterHotKey(
-                    int(self.winId()), self._HOTKEY_ID,
-                    self._HOTKEY_MODS, self._HOTKEY_VK,
+            for hotkey_id, vk in self._HOTKEY_VKS.items():
+                ok = bool(
+                    ctypes.windll.user32.RegisterHotKey(
+                        int(self.winId()), hotkey_id,
+                        self._HOTKEY_MODS, vk,
+                    )
                 )
-            )
+                self._hotkey_registered[hotkey_id] = ok
         except (OSError, AttributeError, ValueError):
-            self._hotkey_registered = False
+            self._hotkey_registered = {}
 
     def _unregister_hotkey(self):
-        if not getattr(self, "_hotkey_registered", False):
+        registered = getattr(self, "_hotkey_registered", None)
+        if not registered:
             return
         try:
             import ctypes
-            ctypes.windll.user32.UnregisterHotKey(int(self.winId()), self._HOTKEY_ID)
+            for hotkey_id, ok in registered.items():
+                if ok:
+                    ctypes.windll.user32.UnregisterHotKey(int(self.winId()), hotkey_id)
         except (OSError, AttributeError, ValueError):
             pass
-        self._hotkey_registered = False
+        self._hotkey_registered = {}
+
+    def _on_global_hotkey(self, hotkey_id):
+        """Dispatch a global-hotkey event by its registered id."""
+        if hotkey_id == self._HOTKEY_ID:
+            self._toggle_visible()
+        elif hotkey_id == self._HOTKEY_PAUSE_ID:
+            self._toggle_detection()
+        elif hotkey_id == self._HOTKEY_CLEAR_ID:
+            self.controller.clear_rpc()
+            self._notify("AniPresence", "Presence cleared.")
+        elif hotkey_id == self._HOTKEY_NEXT_ID and self._current_payload:
+            self._next_episode()
+
+    def _toggle_detection(self):
+        """Flip the auto-detection toggle (used by the pause hotkey)."""
+        state = not self.cfg.data.detection_enabled
+        self.cfg.set(detection_enabled=state)
+        self.detection_check.setChecked(state)
+        self._notify(
+            "AniPresence",
+            "Auto-detection paused." if not state else "Auto-detection resumed.",
+        )
 
     def _save_window_state(self):
         """Persist size/position, maximized state and the active tab."""
@@ -826,6 +892,20 @@ class MainWindow(QMainWindow):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
         self.setCentralWidget(central)
+
+        # Cinematic backdrop: a dimmed full-window copy of the cover art that
+        # sits behind everything. It's only visible when the base window fills
+        # are translucent (see _apply_stylesheet) and a cover is loaded.
+        self._ambient = QLabel(central)
+        self._ambient.setObjectName("ambient")
+        self._ambient.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._ambient_effect = QGraphicsOpacityEffect(self._ambient)
+        self._ambient_effect.setOpacity(
+            0.6 if self._applied_theme == "light" else 0.45
+        )
+        self._ambient.setGraphicsEffect(self._ambient_effect)
+        self._ambient.hide()
+        self._ambient.lower()
 
         # Title bar: mac-style traffic lights + draggable header.
         self.title_bar = _ChromeTitleBar()
@@ -993,10 +1073,15 @@ class MainWindow(QMainWindow):
         self.tabbar.currentChanged.connect(self._on_tab_changed)
         outer.addWidget(self.stack, 1)
 
-        left = QHBoxLayout()          # dashboard row: card | controls
+        left = QHBoxLayout()          # dashboard row: left column | controls
         left.setContentsMargins(0, 0, 0, 0)
         left.setSpacing(self._gap)
         dashboard.setLayout(left)
+
+        left_col = QVBoxLayout()      # card on top, live presence preview below
+        left_col.setContentsMargins(0, 0, 0, 0)
+        left_col.setSpacing(self._gap)
+        left.addLayout(left_col, 5)
 
         card = QFrame()
         card.setObjectName("card")
@@ -1087,7 +1172,10 @@ class MainWindow(QMainWindow):
         info.addLayout(button_row)
         info.addStretch(1)
         card_layout.addLayout(info, 1)
-        left.addWidget(card, 5)
+        left_col.addWidget(card, 5)
+
+        # Live mockup of the Discord activity card, updated in real time.
+        self._build_preview(left_col)
 
         # Controls
         controls = QFrame()
@@ -1108,6 +1196,11 @@ class MainWindow(QMainWindow):
         self.idle_check.setToolTip("Show a 'Browsing anime' presence instead of clearing it when no video is detected.")
         self.mica_check = QCheckBox("Mica backdrop (Windows 11)")
         self.mica_check.setToolTip("Draw the Mica material behind the window (applies on next start; falls back to acrylic).")
+        self.cinematic_check = QCheckBox("Cinematic backdrop")
+        self.cinematic_check.setToolTip(
+            "Dim the current cover art behind the whole window for a cinematic look. "
+            "The base window fills become translucent so the backdrop shows through."
+        )
         self.hide_adult_check = QCheckBox("Hide 18+/ecchi from Discord status")
         self.hide_adult_check.setToolTip(
             "Don't broadcast animes that are 18+ or ecchi/NSFW-adjacent to Discord. "
@@ -1119,7 +1212,7 @@ class MainWindow(QMainWindow):
             self.rpc_check, self.detection_check, self.auto_chrome_check,
             self.tray_check, self.startup_check, self.privacy_check,
             self.compact_check, self.idle_check, self.mica_check,
-            self.hide_adult_check,
+            self.cinematic_check, self.hide_adult_check,
         ]
         grid = QGridLayout()
         grid.setSpacing(8)
@@ -1640,6 +1733,7 @@ class MainWindow(QMainWindow):
         self.compact_check.toggled.connect(self._on_compact_toggled)
         self.idle_check.toggled.connect(lambda on: self.cfg.set(idle_presence=on))
         self.mica_check.toggled.connect(self._on_mica_toggled)
+        self.cinematic_check.toggled.connect(self._on_cinematic_toggled)
         self.hide_adult_check.toggled.connect(lambda on: self.cfg.set(hide_adult_content=on))
         self.anilist_combo.currentIndexChanged.connect(self._on_anilist_account_switch)
         self.interval_spin.valueChanged.connect(self._on_interval_changed)
@@ -1680,6 +1774,7 @@ class MainWindow(QMainWindow):
         load(self.compact_check, self.cfg.data.compact)
         load(self.idle_check, self.cfg.data.idle_presence)
         load(self.mica_check, self.cfg.data.mica_backdrop)
+        load(self.cinematic_check, self.cfg.data.cinematic_backdrop)
         load(self.hide_adult_check, self.cfg.data.hide_adult_content)
         from ..startup import is_enabled
         load(self.startup_check, self.cfg.data.start_windows and is_enabled())
@@ -1706,12 +1801,13 @@ class MainWindow(QMainWindow):
                 self._applied_theme,
                 self.cfg.data.accent,
                 self.cfg.data.compact,
-                self.cfg.data.mica_backdrop,
+                self.cfg.data.mica_backdrop or self.cfg.data.cinematic_backdrop,
             )
         )
         if self._cover_spinner is not None:
             self._cover_spinner.set_color(self.cfg.data.accent)
         self._apply_backdrop()
+        self._update_ambient()
 
     def _maybe_resync_system_theme(self):
         """Live-follow Windows light/dark mode when the 'System' theme is active."""
@@ -1723,6 +1819,10 @@ class MainWindow(QMainWindow):
 
     def _on_mica_toggled(self, on):
         self.cfg.set(mica_backdrop=on)
+        self._apply_stylesheet()
+
+    def _on_cinematic_toggled(self, on):
+        self.cfg.set(cinematic_backdrop=on)
         self._apply_stylesheet()
 
     def _on_theme_changed(self, index):
@@ -1744,7 +1844,9 @@ class MainWindow(QMainWindow):
             self.cfg.set(accent=color.name())
             self.setWindowIcon(app_icon(64, color.name()))
             if self._tray:
+                self._tray_base_pm = None
                 self._tray.setIcon(app_icon(64, color.name()))
+                self._update_tray_icon(self._tray_fraction)
             self._apply_stylesheet()
 
     def _on_startup_toggled(self, on):
@@ -1794,6 +1896,8 @@ class MainWindow(QMainWindow):
         else:
             self.show_placeholder()
         self._update_cover_size()
+        self._update_ambient()
+        self._update_preview()
         if self.tabbar.currentIndex() == self._stats_tab_index:
             self._refresh_stats()
 
@@ -1998,7 +2102,6 @@ class MainWindow(QMainWindow):
         else:
             self.progress.setValue(0)
 
-        from ..discord.rpc import format_seconds
         self.time_cur.setText(format_seconds(current))
         self.time_total.setText(format_seconds(duration))
 
@@ -2011,7 +2114,15 @@ class MainWindow(QMainWindow):
         if self._tray:
             self._tray_act_site.setEnabled(bool(payload.get("url")))
             self._tray_act_pwa.setEnabled(bool(payload.get("url")))
-            self._tray.setToolTip(f"AniPresence · {title}")
+            frac = (current / duration) if duration > 0 else None
+            self._tray_fraction = frac
+            self._update_tray_icon(frac)
+            tip = f"AniPresence · {title}"
+            if payload.get("episode"):
+                tip += f" · Ep {payload['episode']}"
+            if duration > 0:
+                tip += f" · {format_seconds(current)} / {format_seconds(duration)}"
+            self._tray.setToolTip(tip)
 
         cover = payload.get("cover_url") or ""
         if cover and cover != self._cover_url:
@@ -2023,6 +2134,196 @@ class MainWindow(QMainWindow):
                     self.cover_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
                 )
             )
+
+        self._update_preview()
+
+    # --------------------------------------------------------------- preview
+    def _build_preview(self, parent_layout):
+        """A live mockup of the Discord activity card (updates in real time)."""
+        frame = QFrame()
+        frame.setObjectName("preview")
+        lay = QVBoxLayout(frame)
+        lay.setContentsMargins(self._pad, self._pad, self._pad, self._pad)
+        lay.setSpacing(9)
+
+        head = QHBoxLayout()
+        self.preview_dot = QLabel("\u25cf")
+        self.preview_dot.setObjectName("previewDot")
+        head.addWidget(self.preview_dot)
+        self.preview_app = QLabel("AniPresence")
+        self.preview_app.setObjectName("previewApp")
+        head.addWidget(self.preview_app)
+        head.addStretch(1)
+        self.preview_status = QLabel("Idle")
+        self.preview_status.setObjectName("previewStatus")
+        head.addWidget(self.preview_status)
+        lay.addLayout(head)
+
+        self.preview_title = QLabel("Nothing playing")
+        self.preview_title.setObjectName("previewTitle")
+        self.preview_title.setWordWrap(True)
+        lay.addWidget(self.preview_title)
+
+        self.preview_state = QLabel("Play an anime to preview your presence.")
+        self.preview_state.setObjectName("previewState")
+        self.preview_state.setWordWrap(True)
+        lay.addWidget(self.preview_state)
+
+        foot = QHBoxLayout()
+        self.preview_elapsed = QLabel("")
+        self.preview_elapsed.setObjectName("previewTime")
+        foot.addWidget(self.preview_elapsed)
+        foot.addStretch(1)
+        self.preview_buttons = QLabel("Watch Anime · Open AniList")
+        self.preview_buttons.setObjectName("previewButtons")
+        foot.addWidget(self.preview_buttons)
+        lay.addLayout(foot)
+
+        frame.setMinimumHeight(96)
+        parent_layout.addWidget(frame)
+        self._preview_frame = frame
+
+    def _update_preview(self):
+        """Refresh the mock Discord card to mirror the live controller state."""
+        if not getattr(self, "preview_title", None):
+            return
+        payload = self._current_payload
+        if not payload:
+            self.preview_status.setText("Idle")
+            self.preview_title.setText("Nothing playing")
+            self.preview_state.setText("Play an anime to preview your presence.")
+            self.preview_elapsed.setText("")
+            self.preview_buttons.setText("")
+            return
+
+        title = payload.get("title") or "Unknown title"
+        self.preview_title.setText(f"Watching: {title}")
+        duration = float(payload.get("duration") or 0)
+        current = float(payload.get("current_time") or 0)
+        parts = []
+        if payload.get("episode"):
+            parts.append(f"Episode {payload['episode']}")
+        if duration > 0:
+            parts.append(f"{format_seconds(current)} / {format_seconds(duration)}")
+        if payload.get("website"):
+            parts.append(f"on {payload['website']}")
+        paused = bool(payload.get("paused"))
+        self.preview_status.setText("Paused" if paused else "Playing")
+        if paused and parts:
+            parts = ["Paused"] + parts
+        self.preview_state.setText(" · ".join(parts) or "Watching")
+
+        start = payload.get("session_start")
+        if start and not paused:
+            elapsed = max(0, int(time.time() - start))
+            self.preview_elapsed.setText(f"{format_seconds(elapsed)} elapsed")
+        else:
+            self.preview_elapsed.setText("")
+
+        buttons = []
+        if payload.get("url"):
+            buttons.append("Watch Anime")
+        if payload.get("anilist_url"):
+            buttons.append("Open AniList")
+        self.preview_buttons.setText("  ·  ".join(buttons))
+
+    def _tick_preview_elapsed(self):
+        """Keep the preview's elapsed clock live while something plays."""
+        if not getattr(self, "preview_elapsed", None) or not self._current_payload:
+            return
+        if self._current_payload.get("paused"):
+            return
+        start = self._current_payload.get("session_start")
+        if not start:
+            return
+        elapsed = max(0, int(time.time() - start))
+        self.preview_elapsed.setText(f"{format_seconds(elapsed)} elapsed")
+
+    # ------------------------------------------------------------- ambient
+    def _update_ambient(self):
+        """Fill the window behind the UI with the cover art (cinematic mode).
+
+        Rests the pixmap to a cover-crop fill every resize; the QSS makes the
+        base window fills transparent so this layer peeks through.
+        """
+        ambient = self._ambient
+        if ambient is None:
+            return
+        cover = self._cover_pixmap
+        if not self.cfg.data.cinematic_backdrop or cover is None or cover.isNull():
+            ambient.hide()
+            return
+        w = self.width()
+        h = self.height()
+        if w <= 0 or h <= 0:
+            ambient.hide()
+            return
+        scaled = cover.scaled(
+            w * 2, h * 2, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation
+        )
+        x = (scaled.width() - w) // 2
+        y = (scaled.height() - h) // 2
+        ambient.setPixmap(scaled.copy(x, y, w, h))
+        ambient.setGeometry(0, 0, w, h)
+        ambient.lower()
+        ambient.show()
+
+    # -------------------------------------------------------------- tray
+    def _tray_base_pixmap(self):
+        """The clean 64px logo (no ring) used to render progress overlays."""
+        if self._tray_base_pm is not None:
+            return self._tray_base_pm
+        try:
+            from ..logo import logo_pixmap
+            pm = logo_pixmap(64)
+            if pm is not None:
+                self._tray_base_pm = pm
+                return pm
+        except Exception:  # noqa: BLE001
+            pass
+        pm = QPixmap(64, 64)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setBrush(QColor(self.cfg.data.accent))
+        p.setPen(Qt.NoPen)
+        p.drawRoundedRect(0, 0, 64, 64, 14, 14)
+        p.setPen(QPen(QColor("#ffffff")))
+        font = p.font()
+        font.setPixelSize(26)
+        font.setBold(True)
+        p.setFont(font)
+        p.drawText(pm.rect(), Qt.AlignCenter, "AP")
+        p.end()
+        self._tray_base_pm = pm
+        return pm
+
+    def _update_tray_icon(self, fraction=None):
+        """Draw a progress ring around the logo for the tray icon."""
+        if self._tray is None:
+            return
+        base = self._tray_base_pixmap()
+        pm = QPixmap(base.size())
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.drawPixmap(0, 0, base)
+        if fraction and 0 < fraction < 1:
+            pen = QPen(QColor(self.cfg.data.accent), 4)
+            pen.setCapStyle(Qt.RoundCap)
+            p.setPen(pen)
+            m = 3.0
+            rect = QRectF(m, m, base.width() - 2 * m, base.height() - 2 * m)
+            p.drawArc(rect, 90 * 16, int(-fraction * 360 * 16))
+        p.end()
+        self._tray.setIcon(QIcon(pm))
+
+    def _reset_tray_icon(self):
+        """Drop any progress ring and restore the plain logo."""
+        if self._tray is None:
+            return
+        self._tray_fraction = None
+        self._tray.setIcon(app_icon(64, self.cfg.data.accent))
 
     def _on_recent(self, entries):
         self._last_recent = entries
@@ -2215,6 +2516,7 @@ class MainWindow(QMainWindow):
                     pixmap.scaled(self.cover_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 )
                 self._cover_spinner.hide()
+                self._update_ambient()
                 return
         self._cover_requested = True
         self._cover_spinner.show()
@@ -2297,6 +2599,7 @@ class MainWindow(QMainWindow):
         self.cover_label.setPixmap(
             pixmap.scaled(size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         )
+        self._update_ambient()
         try:
             if not self._cover_cache_dir.exists():
                 self._cover_cache_dir.mkdir(parents=True, exist_ok=True)
@@ -2344,6 +2647,7 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event):  # noqa: N802 (Qt naming)
         self._update_header_for_width()
         self._update_cover_size()
+        self._update_ambient()
         super().resizeEvent(event)
 
     # --------------------------------------------------------------- actions
@@ -2465,6 +2769,8 @@ class MainWindow(QMainWindow):
         self.time_total.setText("00:00")
         self.cover_label.clear()
         self.cover_label.setText("Manual")
+        self._cover_pixmap = None
+        self._cover_spinner.hide()
         self.open_site_btn.setEnabled(False)
         self.open_pwa_btn.setEnabled(False)
         self.open_anilist_btn.setEnabled(False)
@@ -2475,6 +2781,9 @@ class MainWindow(QMainWindow):
             self._tray_act_site.setEnabled(False)
             self._tray_act_pwa.setEnabled(False)
             self._tray.setToolTip(f"AniPresence · {title}")
+            self._reset_tray_icon()
+        self._update_ambient()
+        self._update_preview()
 
     def _on_clear_manual(self):
         self.controller.clear_manual_presence()
@@ -2508,7 +2817,7 @@ class MainWindow(QMainWindow):
             attr(handle, 20, ctypes.byref(dark_var), ctypes.sizeof(dark_var))  # immersive dark mode
             corner = ctypes.c_int(2)  # DWMWA_WINDOW_CORNER_PREFERENCE = 33, value 2 = ROUND
             attr(handle, 33, ctypes.byref(corner), ctypes.sizeof(corner))
-            if self.cfg.data.mica_backdrop:
+            if self.cfg.data.mica_backdrop or self.cfg.data.cinematic_backdrop:
                 mica_var = ctypes.c_int(2)  # DWMWA_SYSTEMBACKDROP_TYPE = 38, value 2 = MICA
                 if attr(handle, 38, ctypes.byref(mica_var), ctypes.sizeof(mica_var)) == 0:
                     return
@@ -2594,6 +2903,9 @@ class MainWindow(QMainWindow):
             self._tray_act_site.setEnabled(False)
             self._tray_act_pwa.setEnabled(False)
             self._tray.setToolTip("AniPresence")
+            self._reset_tray_icon()
+        self._update_ambient()
+        self._update_preview()
 
     def _animated_hide_to_tray(self):
         """Fade the window out, then tuck it away in the system tray."""

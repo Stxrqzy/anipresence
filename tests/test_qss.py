@@ -47,3 +47,22 @@ def test_invalid_accent_falls_back():
     assert base == "#7c5cff"
     assert QColor(hover).isValid()
     assert QColor(pressed).isValid()
+
+
+def test_preview_and_ambient_selectors_present_in_both_themes():
+    for theme in ("dark", "light"):
+        qss = build_theme_qss(theme)
+        assert "QLabel#ambient" in qss
+        assert "QFrame#preview" in qss
+        assert "QLabel#previewTitle" in qss
+        assert "QLabel#previewState" in qss
+        assert "QLabel#previewTime" in qss
+        assert "QLabel#previewButtons" in qss
+
+
+def test_mica_flag_also_enables_cinematic_transparency():
+    # Cinematic mode reuses the mica transparency pass, so the opaque window
+    # fills disappear from both themes when the flag is passed.
+    for theme in ("dark", "light"):
+        qss = build_theme_qss(theme, mica=True)
+        assert "background-color: rgba(0, 0, 0, 0)" in qss
