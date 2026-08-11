@@ -66,3 +66,9 @@ def test_mica_flag_also_enables_cinematic_transparency():
     for theme in ("dark", "light"):
         qss = build_theme_qss(theme, mica=True)
         assert "background-color: rgba(0, 0, 0, 0)" in qss
+
+
+def test_hotkey_recording_selector_in_both_themes():
+    for theme in ("dark", "light"):
+        qss = build_theme_qss(theme)
+        assert 'QPushButton#ghost[recording="true"]' in qss

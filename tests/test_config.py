@@ -99,3 +99,20 @@ def test_cinematic_backdrop_defaults_and_roundtrip(tmp_path):
     assert cfg.data.cinematic_backdrop is True
     cfg.set(cinematic_backdrop=False)
     assert ConfigManager(str(path)).data.cinematic_backdrop is False
+
+
+def test_hotkey_defaults(tmp_path):
+    cfg = ConfigManager(str(tmp_path / "config.json"))
+    assert cfg.data.hotkey_toggle == "Ctrl+Alt+A"
+    assert cfg.data.hotkey_pause == "Ctrl+Alt+P"
+    assert cfg.data.hotkey_clear == "Ctrl+Alt+X"
+    assert cfg.data.hotkey_next == "Ctrl+Alt+N"
+
+
+def test_hotkey_roundtrip(tmp_path):
+    path = tmp_path / "config.json"
+    cfg = ConfigManager(str(path))
+    cfg.set(hotkey_toggle="Alt+Shift+W", hotkey_clear="Ctrl+F9")
+    loaded = ConfigManager(str(path))
+    assert loaded.data.hotkey_toggle == "Alt+Shift+W"
+    assert loaded.data.hotkey_clear == "Ctrl+F9"

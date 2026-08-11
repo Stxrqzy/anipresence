@@ -91,6 +91,7 @@ QPushButton:pressed { background-color: #6a4ce0; }
 QPushButton:disabled { background-color: rgba(38, 42, 55, 0.7); color: #5c6278; }
 QPushButton#ghost { background-color: rgba(38, 42, 55, 0.66); color: #cbd0de; border: 1px solid rgba(139, 148, 175, 0.12); }
 QPushButton#ghost:hover { background-color: rgba(48, 54, 74, 0.8); }
+QPushButton#ghost[recording="true"] { background-color: rgba(124, 92, 255, 0.22); color: #ffffff; border-color: #7c5cff; }
 QCheckBox { spacing: 9px; color: #d6d9e3; }
 QCheckBox::indicator { width: 16px; height: 16px; border-radius: 5px; border: 1.5px solid #3a4057; background-color: rgba(23, 25, 35, 0.8); }
 QCheckBox::indicator:hover { border-color: #7c5cff; }
@@ -157,6 +158,7 @@ QPushButton:pressed { background-color: #6a4ce0; }
 QPushButton:disabled { background-color: rgba(236, 238, 243, 0.7); color: #9aa0b5; }
 QPushButton#ghost { background-color: rgba(236, 238, 243, 0.72); color: #3b4252; border: 1px solid rgba(0, 0, 0, 0.06); }
 QPushButton#ghost:hover { background-color: rgba(226, 229, 236, 0.9); }
+QPushButton#ghost[recording="true"] { background-color: rgba(124, 92, 255, 0.22); color: #1c1e26; border-color: #7c5cff; }
 QCheckBox { spacing: 9px; color: #374151; }
 QCheckBox::indicator { width: 16px; height: 16px; border-radius: 5px; border: 1.5px solid #c6cbd6; background-color: rgba(255, 255, 255, 0.8); }
 QCheckBox::indicator:hover { border-color: #7c5cff; }
@@ -537,6 +539,109 @@ class _EdgeResizeFilter(QAbstractNativeEventFilter):
         return False, 0
 
 
+class _HotkeyButton(QPushButton):
+    """A button that records the next key combination when clicked.
+
+    Clicking it enters "recording" mode; the next key press (with at least one
+    modifier) becomes the new hotkey spec, which is handed to *on_change*.
+    Esc cancels. While recording, global hotkeys are unregistered so the combo
+    the user is trying to assign doesn't fire (see *on_record_start/end*).
+    """
+
+    # Qt.Key_* -> Windows virtual-key code (subset used by RegisterHotKey).
+    _QT_TO_VK = {}
+    for _name in [c for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"]:
+        _QT_TO_VK[getattr(Qt, f"Key_{_name}")] = ord(_name)
+    for _d in range(10):
+        _QT_TO_VK[getattr(Qt, f"Key_{_d}")] = 0x30 + _d
+    for _i in range(1, 13):
+        _QT_TO_VK[getattr(Qt, f"Key_F{_i}")] = 0x6F + _i
+    _QT_TO_VK.update({
+        Qt.Key_Space: 0x20, Qt.Key_Return: 0x0D, Qt.Key_Enter: 0x0D,
+        Qt.Key_Tab: 0x09, Qt.Key_Escape: 0x1B, Qt.Key_Up: 0x26,
+        Qt.Key_Down: 0x28, Qt.Key_Left: 0x25, Qt.Key_Right: 0x27,
+        Qt.Key_Home: 0x24, Qt.Key_End: 0x23, Qt.Key_PageUp: 0x21,
+        Qt.Key_PageDown: 0x22, Qt.Key_Delete: 0x2E, Qt.Key_Insert: 0x2D,
+    })
+
+    def __init__(self, spec="", on_change=None, on_record_start=None,
+                 on_record_end=None, parent=None):
+        super().__init__(parent)
+        self._on_change = on_change
+        self._on_record_start = on_record_start
+        self._on_record_end = on_record_end
+        self._recording = False
+        self.setObjectName("ghost")
+        self.setToolTip(
+            "Click, then press the new key combination. Esc cancels."
+        )
+        self.set_spec(spec)
+        self.clicked.connect(self._begin_record)
+
+    def set_spec(self, spec):
+        self._spec = spec or ""
+        if not self._recording:
+            self.setText(self._spec or "Not set")
+
+    def spec(self):
+        return self._spec
+
+    def _begin_record(self):
+        if self._recording:
+            self._end_record(cancel=True)
+            return
+        self._recording = True
+        self.setText("Press keys… (Esc to cancel)")
+        self.setProperty("recording", True)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        if self._on_record_start:
+            self._on_record_start()
+
+    def _end_record(self, cancel=False):
+        self._recording = False
+        self.setProperty("recording", False)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        if cancel:
+            self.setText(self._spec or "Not set")
+        if self._on_record_end:
+            self._on_record_end()
+
+    def keyPressEvent(self, event):
+        if not self._recording:
+            return super().keyPressEvent(event)
+        if event.key() == Qt.Key_Escape:
+            self._end_record(cancel=True)
+            event.accept()
+            return
+        from ..core.hotkeys import MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, format_hotkey
+        modifiers = event.modifiers()
+        mods = 0
+        if modifiers & Qt.ControlModifier:
+            mods |= MOD_CONTROL
+        if modifiers & Qt.AltModifier:
+            mods |= MOD_ALT
+        if modifiers & Qt.ShiftModifier:
+            mods |= MOD_SHIFT
+        if modifiers & Qt.MetaModifier:
+            mods |= MOD_WIN
+        vk = self._QT_TO_VK.get(event.key())
+        if vk is None or mods == 0:
+            event.accept()  # no key or no modifier yet; keep recording
+            return
+        spec = format_hotkey(mods, vk)
+        if not spec:
+            event.accept()
+            return
+        self._spec = spec
+        self._end_record()
+        self.setText(spec)
+        if self._on_change:
+            self._on_change(spec)
+        event.accept()
+
+
 class MainWindow(QMainWindow):
     def __init__(self, cfg: ConfigManager, bridge: UiBridge, controller: Controller):
         super().__init__()
@@ -783,30 +888,48 @@ class MainWindow(QMainWindow):
     _HOTKEY_PAUSE_ID = 0xAF02    # toggle detection
     _HOTKEY_CLEAR_ID = 0xAF03    # clear presence
     _HOTKEY_NEXT_ID = 0xAF04     # next episode
-    _HOTKEY_MODS = 0x0001 | 0x0002  # MOD_ALT | MOD_CONTROL
-    _HOTKEY_VKS = {
-        _HOTKEY_ID: 0x41,             # 'A' -> Ctrl+Alt+A
-        _HOTKEY_PAUSE_ID: 0x50,       # 'P' -> Ctrl+Alt+P
-        _HOTKEY_CLEAR_ID: 0x58,       # 'X' -> Ctrl+Alt+X
-        _HOTKEY_NEXT_ID: 0x4E,        # 'N' -> Ctrl+Alt+N
+    # hotkey_id -> config field holding its spec string.
+    _HOTKEY_CONFIG = {
+        _HOTKEY_ID: "hotkey_toggle",
+        _HOTKEY_PAUSE_ID: "hotkey_pause",
+        _HOTKEY_CLEAR_ID: "hotkey_clear",
+        _HOTKEY_NEXT_ID: "hotkey_next",
+    }
+    _HOTKEY_LABELS = {
+        _HOTKEY_ID: "Show / hide window",
+        _HOTKEY_PAUSE_ID: "Pause / resume detection",
+        _HOTKEY_CLEAR_ID: "Clear presence",
+        _HOTKEY_NEXT_ID: "Next episode",
     }
 
     def _register_hotkey(self):
-        """Global hotkeys: Ctrl+Alt+A toggle window, Ctrl+Alt+P toggle
-        detection, Ctrl+Alt+X clear presence, Ctrl+Alt+N next episode."""
+        """Register every configured global hotkey (Windows only).
+
+        Specs are read from config, so hotkeys changed in Settings apply live.
+        """
         self._hotkey_registered = {}
         try:
             import ctypes
-            for hotkey_id, vk in self._HOTKEY_VKS.items():
+            from ..core.hotkeys import parse_hotkey
+            for hotkey_id, field in self._HOTKEY_CONFIG.items():
+                parsed = parse_hotkey(getattr(self.cfg.data, field, ""))
+                if parsed is None:
+                    self._hotkey_registered[hotkey_id] = False
+                    continue
+                modifiers, vk = parsed
                 ok = bool(
                     ctypes.windll.user32.RegisterHotKey(
-                        int(self.winId()), hotkey_id,
-                        self._HOTKEY_MODS, vk,
+                        int(self.winId()), hotkey_id, modifiers, vk
                     )
                 )
                 self._hotkey_registered[hotkey_id] = ok
         except (OSError, AttributeError, ValueError):
             self._hotkey_registered = {}
+
+    def _reload_hotkeys(self):
+        """Unregister and re-register after a Settings change."""
+        self._unregister_hotkey()
+        self._register_hotkey()
 
     def _unregister_hotkey(self):
         registered = getattr(self, "_hotkey_registered", None)
@@ -1045,6 +1168,9 @@ class MainWindow(QMainWindow):
         self._build_stats_page(m, compact)
         self.stack.addWidget(self._stats_page)
 
+        self._build_settings_page(m, compact)
+        self.stack.addWidget(self._settings_page)
+
         log_page = QWidget()
         log_layout = QVBoxLayout(log_page)
         log_layout.setContentsMargins(m, (6 if not compact else 4), m, m)
@@ -1068,8 +1194,10 @@ class MainWindow(QMainWindow):
         self.tabbar.addTab("Main")
         self.tabbar.addTab("Recently Watched")
         self.tabbar.addTab("Stats")
+        self._stats_tab_index = self.tabbar.count() - 1
+        self.tabbar.addTab("Settings")
         self.tabbar.addTab("Log")
-        self._stats_tab_index = self.tabbar.count() - 2
+        self._settings_tab_index = self.tabbar.count() - 2
         self.tabbar.currentChanged.connect(self._on_tab_changed)
         outer.addWidget(self.stack, 1)
 
@@ -1516,6 +1644,186 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self._stats_stack, 1)
 
+    # ------------------------------------------------------------- settings
+    def _build_settings_page(self, margin, compact):
+        """Assemble the "Settings" tab: global-hotkey recorder rows plus the
+        less-common knobs that don't belong on the main dashboard."""
+        page = QScrollArea()
+        page.setObjectName("scroller")
+        page.setWidgetResizable(True)
+        page.setFrameShape(QFrame.NoFrame)
+        page.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        page.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        host = QWidget()
+        layout = QVBoxLayout(host)
+        layout.setContentsMargins(margin, (6 if not compact else 4), margin, margin)
+        layout.setSpacing(self._gap)
+        page.setWidget(host)
+        self._settings_page = page
+
+        # -- Global hotkeys -------------------------------------------------
+        hotkeys = QFrame()
+        hotkeys.setObjectName("card")
+        hk = QVBoxLayout(hotkeys)
+        hk.setContentsMargins(self._pad, self._pad, self._pad, self._pad)
+        hk.setSpacing(10)
+        hk.addWidget(self._field_label("GLOBAL HOTKEYS"))
+        hint = QLabel(
+            "Click a shortcut, then press the new combination. "
+            "Global hotkeys work even when the window is hidden."
+        )
+        hint.setObjectName("subLabel")
+        hint.setWordWrap(True)
+        hk.addWidget(hint)
+
+        self._hotkey_buttons = {}
+        for hotkey_id in (self._HOTKEY_ID, self._HOTKEY_PAUSE_ID,
+                          self._HOTKEY_CLEAR_ID, self._HOTKEY_NEXT_ID):
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            label = QLabel(self._HOTKEY_LABELS[hotkey_id])
+            label.setObjectName("sectionLabel")
+            row.addWidget(label, 1)
+            btn = _HotkeyButton(
+                getattr(self.cfg.data, self._HOTKEY_CONFIG[hotkey_id], ""),
+                on_change=lambda spec, hid=hotkey_id: self._on_hotkey_changed(hid, spec),
+                on_record_start=self._on_hotkey_record_start,
+                on_record_end=self._on_hotkey_record_end,
+            )
+            btn.setFixedWidth(170)
+            row.addWidget(btn)
+            self._hotkey_buttons[hotkey_id] = btn
+            hk.addLayout(row)
+        hk.addWidget(self._sep())
+        reset_row = QHBoxLayout()
+        reset_row.addStretch(1)
+        reset_btn = QPushButton("Reset to defaults")
+        reset_btn.setObjectName("ghost")
+        reset_btn.setToolTip("Restore Ctrl+Alt+A / P / X / N")
+        reset_btn.clicked.connect(self._on_reset_hotkeys)
+        reset_row.addWidget(reset_btn)
+        hk.addLayout(reset_row)
+        layout.addWidget(hotkeys)
+
+        # -- Misc settings --------------------------------------------------
+        misc = QFrame()
+        misc.setObjectName("card")
+        mm = QVBoxLayout(misc)
+        mm.setContentsMargins(self._pad, self._pad, self._pad, self._pad)
+        mm.setSpacing(10)
+        mm.addWidget(self._field_label("OTHER SETTINGS"))
+
+        min_row = QHBoxLayout()
+        min_label = QLabel("Minimum match score (%)")
+        min_label.setObjectName("sectionLabel")
+        min_row.addWidget(min_label, 1)
+        self.match_spin = QSpinBox()
+        self.match_spin.setRange(0, 100)
+        self.match_spin.setValue(int(self.cfg.data.min_match_score))
+        self.match_spin.setToolTip(
+            "How confident a title match must be before it's shown. Lower = "
+            "more permissive."
+        )
+        min_row.addWidget(self.match_spin)
+        mm.addLayout(min_row)
+
+        ttl_row = QHBoxLayout()
+        ttl_label = QLabel("AniList cache (days)")
+        ttl_label.setObjectName("sectionLabel")
+        ttl_row.addWidget(ttl_label, 1)
+        self.ttl_spin = QSpinBox()
+        self.ttl_spin.setRange(0, 90)
+        self.ttl_spin.setValue(int(self.cfg.data.anilist_cache_ttl_days))
+        self.ttl_spin.setToolTip("How long fetched AniList data stays cached.")
+        ttl_row.addWidget(self.ttl_spin)
+        mm.addLayout(ttl_row)
+
+        port_row = QHBoxLayout()
+        port_label = QLabel("Chrome debugging port")
+        port_label.setObjectName("sectionLabel")
+        port_row.addWidget(port_label, 1)
+        self.port_spin = QSpinBox()
+        self.port_spin.setRange(1, 65535)
+        self.port_spin.setValue(int(self.cfg.data.chrome_debugging_port))
+        self.port_spin.setToolTip(
+            "Local port the browser exposes for page inspection. Must match "
+            "the --remote-debugging-port your browser starts with."
+        )
+        port_row.addWidget(self.port_spin)
+        mm.addLayout(port_row)
+
+        paused_row = QHBoxLayout()
+        self.paused_check = QCheckBox("Keep presence when video is paused")
+        self.paused_check.setChecked(self.cfg.data.show_paused_presence)
+        self.paused_check.setToolTip(
+            "Leave the current presence up while playback is paused instead of "
+            "resetting it."
+        )
+        paused_row.addWidget(self.paused_check, 1)
+        mm.addLayout(paused_row)
+
+        no_video_row = QHBoxLayout()
+        self.hide_no_video_check = QCheckBox(
+            "Hide presence when no video is detected"
+        )
+        self.hide_no_video_check.setChecked(self.cfg.data.hide_when_no_video)
+        self.hide_no_video_check.setToolTip(
+            "Clear the presence when nothing is playing instead of showing "
+            "the idle/browsing state."
+        )
+        no_video_row.addWidget(self.hide_no_video_check, 1)
+        mm.addLayout(no_video_row)
+
+        self.settings_hint = QLabel("")
+        self.settings_hint.setObjectName("subLabel")
+        self.settings_hint.setWordWrap(True)
+        mm.addWidget(self.settings_hint)
+        layout.addWidget(misc)
+
+        layout.addStretch(1)
+
+    # ---------------------------------------------------------- hotkey io
+    def _on_hotkey_record_start(self):
+        """Global hotkeys must be off while the user composes a new combo."""
+        self._unregister_hotkey()
+        self.settings_hint.setText("Recording — press a key combination…")
+
+    def _on_hotkey_record_end(self):
+        self._register_hotkey()
+        self.settings_hint.setText("")
+
+    def _on_hotkey_changed(self, hotkey_id, spec):
+        field = self._HOTKEY_CONFIG[hotkey_id]
+        if getattr(self.cfg.data, field) != spec:
+            self.cfg.set(**{field: spec})
+        self._reload_hotkeys()
+        self._log_line(f"Hotkey '{self._HOTKEY_LABELS[hotkey_id]}' set to {spec}.")
+        self._notify("AniPresence", f"{self._HOTKEY_LABELS[hotkey_id]}: {spec}")
+
+    def _on_reset_hotkeys(self):
+        defaults = {
+            self._HOTKEY_ID: "Ctrl+Alt+A",
+            self._HOTKEY_PAUSE_ID: "Ctrl+Alt+P",
+            self._HOTKEY_CLEAR_ID: "Ctrl+Alt+X",
+            self._HOTKEY_NEXT_ID: "Ctrl+Alt+N",
+        }
+        for hotkey_id, spec in defaults.items():
+            field = self._HOTKEY_CONFIG[hotkey_id]
+            self.cfg.set(**{field: spec})
+            self._hotkey_buttons[hotkey_id].set_spec(spec)
+        self._reload_hotkeys()
+        self._log_line("Global hotkeys reset to defaults.")
+        self._notify("AniPresence", "Hotkeys reset to defaults.")
+
+    def _on_match_changed(self, value):
+        self.cfg.set(min_match_score=value)
+
+    def _on_ttl_changed(self, value):
+        self.cfg.set(anilist_cache_ttl_days=value)
+
+    def _on_port_changed(self, value):
+        self.cfg.set(chrome_debugging_port=value)
+
     def _stats_menu(self, pos):
         item = self._stats_list.itemAt(pos)
         if item is None:
@@ -1762,6 +2070,16 @@ class MainWindow(QMainWindow):
         self.recent_list.itemDoubleClicked.connect(self._open_recent_item)
         self.recent_list.customContextMenuRequested.connect(self._recent_menu)
 
+        self.match_spin.valueChanged.connect(self._on_match_changed)
+        self.ttl_spin.valueChanged.connect(self._on_ttl_changed)
+        self.port_spin.valueChanged.connect(self._on_port_changed)
+        self.paused_check.toggled.connect(
+            lambda on: self.cfg.set(show_paused_presence=on)
+        )
+        self.hide_no_video_check.toggled.connect(
+            lambda on: self.cfg.set(hide_when_no_video=on)
+        )
+
     def _load_toggles_from_config(self):
         def load(widget, value):
             with QSignalBlocker(widget):
@@ -1784,6 +2102,16 @@ class MainWindow(QMainWindow):
             self.theme_combo.setCurrentIndex(THEME_INDEX.get(self.cfg.data.theme, 0))
         with QSignalBlocker(self.broadcast_combo):
             self.broadcast_combo.setCurrentIndex(BROADCAST_INDEX.get(self.cfg.data.rpc_broadcast, 0))
+        with QSignalBlocker(self.match_spin):
+            self.match_spin.setValue(int(self.cfg.data.min_match_score))
+        with QSignalBlocker(self.ttl_spin):
+            self.ttl_spin.setValue(int(self.cfg.data.anilist_cache_ttl_days))
+        with QSignalBlocker(self.port_spin):
+            self.port_spin.setValue(int(self.cfg.data.chrome_debugging_port))
+        load(self.paused_check, self.cfg.data.show_paused_presence)
+        load(self.hide_no_video_check, self.cfg.data.hide_when_no_video)
+        for hotkey_id, btn in getattr(self, "_hotkey_buttons", {}).items():
+            btn.set_spec(getattr(self.cfg.data, self._HOTKEY_CONFIG[hotkey_id], ""))
 
     def _after_onboarding(self):
         """Refresh widgets after the first-run wizard changes the config."""

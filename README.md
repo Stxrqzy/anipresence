@@ -61,7 +61,11 @@ from the page title.
   while something plays, and the tooltip shows title · episode · elapsed.
 - **Global hotkeys** — `Ctrl+Alt+A` toggles the window, `Ctrl+Alt+P` pauses/
   resumes detection, `Ctrl+Alt+X` clears the presence, `Ctrl+Alt+N` opens the
-  next episode.
+  next episode. All four are **reassignable** from the Settings tab (click a
+  shortcut, press the new combination; Esc cancels; Reset restores the defaults).
+- **Settings tab** — a dedicated page for global-hotkey assignment plus the
+  less-common knobs: minimum match score, AniList cache lifetime, the Chrome
+  debugging port, and the paused / no-video presence behaviours.
 
 ---
 
@@ -89,6 +93,8 @@ src/
                                  presence throttling)
     worker.py                    runs the controller on a QThread
     recent.py                    recently-watched history
+    watchlog.py                  per-day/per-title watch-time analytics
+    hotkeys.py                   global-hotkey spec parsing/formatting
   ui/
     bridge.py                    Qt signals worker -> UI + Qt log handler
     app.py                       PySide6 main window

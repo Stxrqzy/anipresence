@@ -58,6 +58,10 @@ class Config:
     hide_adult_content: bool = True
     update_feed_url: str = ""
     onboarding_complete: bool = False
+    hotkey_toggle: str = "Ctrl+Alt+A"        # show/hide the window
+    hotkey_pause: str = "Ctrl+Alt+P"         # pause/resume auto-detection
+    hotkey_clear: str = "Ctrl+Alt+X"         # clear the presence
+    hotkey_next: str = "Ctrl+Alt+N"          # bump to the next episode
 
 
 class ConfigManager:
