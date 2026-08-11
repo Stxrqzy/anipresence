@@ -22,8 +22,8 @@ from PySide6.QtWidgets import (
     QFormLayout, QFrame, QGraphicsOpacityEffect, QGridLayout, QHBoxLayout,
     QInputDialog, QLabel, QLayout, QLineEdit, QListWidget, QListWidgetItem,
     QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
-    QScrollArea, QSpinBox, QStackedWidget, QSystemTrayIcon, QTabBar, QVBoxLayout,
-    QWidget,
+    QScrollArea, QSpinBox, QStackedWidget, QSystemTrayIcon, QTabBar, QToolButton,
+    QVBoxLayout, QWidget,
 )
 from PySide6.QtWidgets import QSizePolicy
 
@@ -55,58 +55,74 @@ THEME_VALUE = {v: k for k, v in THEME_INDEX.items()}
 BROADCAST_INDEX = {"discord": 0, "vencord": 1, "both": 2}
 BROADCAST_VALUE = {v: k for k, v in BROADCAST_INDEX.items()}
 
+# Curated accent palettes (name, hex) — one per season plus a few extras.
+ACCENT_PRESETS = [
+    ("Spring Bloom", "#34d399"),
+    ("Summer Sunset", "#fb923c"),
+    ("Autumn Ember", "#f87171"),
+    ("Winter Frost", "#38bdf8"),
+    ("Cherry Blossom", "#f472b6"),
+    ("Midnight Violet", "#7c5cff"),
+    ("Ocean Depths", "#22d3ee"),
+    ("Forest Dew", "#a3e635"),
+]
+CUSTOM_ACCENT = "__custom__"
+
 DARK_QSS = """
 QWidget { background-color: #0e0f14; color: #e7e9ee; font-family: "Figtree", "Segoe UI Variable", "Segoe UI", sans-serif; font-size: 13px; }
 QMainWindow { background-color: #0e0f14; }
-QLabel#appTitle { font-size: 19px; font-weight: 700; color: #ffffff; }
-QLabel#titleLabel { font-size: 26px; font-weight: 650; color: #ffffff; }
+QLabel#appTitle { font-size: 18px; font-weight: 750; color: #ffffff; letter-spacing: 0.2px; }
+QLabel#titleLabel { font-size: 26px; font-weight: 700; color: #ffffff; letter-spacing: -0.2px; }
 QLabel#subLabel { color: #8a91a8; font-size: 12px; }
 QLabel#versionLabel { color: #5a6178; font-size: 10px; letter-spacing: 0.5px; }
-QLabel#captionLabel { color: #7c5cff; font-size: 13px; font-weight: 600; }
-QLabel#sectionLabel { color: #8a91a8; font-size: 11px; font-weight: 700; }
-QLabel#statValue { color: #ffffff; font-size: 22px; font-weight: 700; }
+QLabel#captionLabel { color: #8b6cff; font-size: 13px; font-weight: 700; letter-spacing: 0.3px; }
+QLabel#sectionLabel { color: #8a91a8; font-size: 11px; font-weight: 700; letter-spacing: 1.2px; }
+QLabel#statValue { color: #ffffff; font-size: 22px; font-weight: 750; }
 QLabel#monogram { background-color: #7c5cff; color: #ffffff; border-radius: 10px; font-size: 16px; font-weight: 700; }
 QLabel#avatar { background-color: #3a4057; color: #e7e9ee; border-radius: 17px; font-size: 15px; font-weight: 700; }
-QLabel#cover { background-color: rgba(18, 20, 29, 0.62); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; color: #4b5268; }
+QLabel#cover { background-color: rgba(18, 20, 29, 0.62); border: 1px solid rgba(255, 255, 255, 0.09); border-radius: 14px; color: #4b5268; }
 QLabel#ambient { background-color: transparent; }
-QFrame#preview { background-color: rgba(23, 25, 35, 0.66); border: 1px solid rgba(139, 148, 175, 0.16); border-radius: 16px; }
+QFrame#preview { background-color: rgba(24, 27, 37, 0.74); border: 1px solid rgba(139, 148, 175, 0.18); border-radius: 18px; }
 QLabel#previewDot { color: #23a55a; font-size: 12px; }
 QLabel#previewApp { color: #ffffff; font-size: 13px; font-weight: 700; }
 QLabel#previewStatus { color: #8a91a8; font-size: 11px; font-weight: 600; }
-QLabel#previewTitle { font-size: 14px; font-weight: 650; color: #ffffff; }
+QLabel#previewTitle { font-size: 14px; font-weight: 700; color: #ffffff; }
 QLabel#previewState { color: #8a91a8; font-size: 12px; }
 QLabel#previewTime { color: #5a6178; font-size: 11px; }
-QLabel#previewButtons { color: #7c5cff; font-size: 11px; font-weight: 600; }
+QLabel#previewButtons { color: #8b6cff; font-size: 11px; font-weight: 700; }
 QTabWidget::pane { border: none; background: transparent; }
 QTabBar { background: transparent; }
-QTabBar::tab { background-color: rgba(23, 25, 35, 0.45); border: 1px solid rgba(139, 148, 175, 0.14); border-bottom: none; border-top-left-radius: 10px; border-top-right-radius: 10px; padding: 8px 22px; margin-right: 5px; color: #9aa3bd; }
-QTabBar::tab:selected { background-color: rgba(23, 25, 35, 0.66); border-color: rgba(139, 148, 175, 0.16); color: #ffffff; }
-QTabBar::tab:hover:!selected { background-color: rgba(48, 54, 74, 0.8); color: #e7e9ee; }
-QLabel#chipOk { color: #4ade80; background-color: rgba(74, 222, 128, 0.12); padding: 4px 10px; border-radius: 12px; font-weight: 600; font-size: 12px; }
-QLabel#chipBad { color: #f87171; background-color: rgba(248, 113, 113, 0.12); padding: 4px 10px; border-radius: 12px; font-weight: 600; font-size: 12px; }
-QFrame#card, QFrame#controls { background-color: rgba(23, 25, 35, 0.66); border: 1px solid rgba(139, 148, 175, 0.16); border-radius: 16px; }
-QFrame#sep { background-color: rgba(255, 255, 255, 0.08); border: none; max-height: 1px; }
-QPushButton { background-color: #7c5cff; color: #ffffff; border: none; border-radius: 8px; padding: 7px 14px; font-weight: 600; }
+QTabBar::tab { background-color: rgba(23, 25, 35, 0.45); border: 1px solid rgba(139, 148, 175, 0.14); border-radius: 12px; padding: 8px 20px; margin: 2px 4px 2px 0; color: #9aa3bd; font-weight: 600; }
+QTabBar::tab:selected { background-color: #7c5cff; border-color: #8b6cff; color: #ffffff; }
+QTabBar::tab:hover:!selected { background-color: rgba(48, 54, 74, 0.85); color: #e7e9ee; }
+QLabel#chipOk { color: #4ade80; background-color: rgba(74, 222, 128, 0.12); padding: 5px 12px; border-radius: 14px; font-weight: 700; font-size: 12px; }
+QLabel#chipBad { color: #f87171; background-color: rgba(248, 113, 113, 0.12); padding: 5px 12px; border-radius: 14px; font-weight: 700; font-size: 12px; }
+QFrame#card, QFrame#controls, QFrame#continueStrip { background-color: rgba(24, 27, 37, 0.7); border: 1px solid rgba(139, 148, 175, 0.17); border-radius: 18px; }
+QFrame#sep { background-color: rgba(255, 255, 255, 0.07); border: none; max-height: 1px; }
+QPushButton { background-color: #7c5cff; color: #ffffff; border: none; border-radius: 10px; padding: 7px 15px; font-weight: 700; }
 QPushButton:hover { background-color: #8b6cff; }
 QPushButton:pressed { background-color: #6a4ce0; }
 QPushButton:disabled { background-color: rgba(38, 42, 55, 0.7); color: #5c6278; }
-QPushButton#ghost { background-color: rgba(38, 42, 55, 0.66); color: #cbd0de; border: 1px solid rgba(139, 148, 175, 0.12); }
-QPushButton#ghost:hover { background-color: rgba(48, 54, 74, 0.8); }
-QPushButton#ghost[recording="true"] { background-color: rgba(124, 92, 255, 0.22); color: #ffffff; border-color: #7c5cff; }
+QPushButton#ghost { background-color: rgba(38, 42, 55, 0.66); color: #cbd0de; border: 1px solid rgba(139, 148, 175, 0.14); }
+QPushButton#ghost:hover { background-color: rgba(48, 54, 74, 0.85); color: #ffffff; }
+QPushButton#ghost[recording="true"] { background-color: rgba(124, 92, 255, 0.22); color: #ffffff; border-color: #8b6cff; }
+QScrollArea#continueScroller { background: transparent; }
+QToolButton#continueTile { background-color: rgba(38, 42, 55, 0.6); color: #e7e9ee; border: 1px solid rgba(139, 148, 175, 0.12); border-radius: 10px; padding: 4px 12px; font-weight: 600; }
+QToolButton#continueTile:hover { background-color: rgba(48, 54, 74, 0.85); border-color: rgba(139, 148, 175, 0.28); }
 QCheckBox { spacing: 9px; color: #d6d9e3; }
 QCheckBox::indicator { width: 16px; height: 16px; border-radius: 5px; border: 1.5px solid #3a4057; background-color: rgba(23, 25, 35, 0.8); }
-QCheckBox::indicator:hover { border-color: #7c5cff; }
+QCheckBox::indicator:hover { border-color: #8b6cff; }
 QCheckBox::indicator:checked { background-color: #7c5cff; border-color: #7c5cff; }
-QLineEdit, QSpinBox, QComboBox { background-color: rgba(16, 18, 26, 0.6); border: 1px solid rgba(139, 148, 175, 0.16); border-radius: 12px; padding: 6px 10px; color: #e7e9ee; selection-background-color: #7c5cff; selection-color: #ffffff; }
-QLineEdit:focus, QSpinBox:focus, QComboBox:focus { border-color: #7c5cff; }
+QLineEdit, QSpinBox, QComboBox { background-color: rgba(16, 18, 26, 0.6); border: 1px solid rgba(139, 148, 175, 0.16); border-radius: 10px; padding: 6px 10px; color: #e7e9ee; selection-background-color: #7c5cff; selection-color: #ffffff; }
+QLineEdit:focus, QSpinBox:focus, QComboBox:focus { border-color: #8b6cff; }
 QLineEdit { placeholder-text-color: #5c6278; }
 QComboBox { padding-right: 24px; }
-QComboBox::drop-down { border: none; background: transparent; width: 22px; border-top-right-radius: 12px; border-bottom-right-radius: 12px; }
-QComboBox QAbstractItemView { background-color: rgba(23, 25, 35, 0.92); border: 1px solid rgba(139, 148, 175, 0.16); border-radius: 8px; padding: 4px; color: #e7e9ee; selection-background-color: #30364a; selection-color: #ffffff; }
-QProgressBar { background-color: rgba(18, 20, 29, 0.6); border: none; border-radius: 5px; height: 10px; }
-QProgressBar::chunk { background-color: #7c5cff; border-radius: 5px; }
-QListWidget, QPlainTextEdit { background-color: rgba(18, 20, 29, 0.6); border: 1px solid rgba(139, 148, 175, 0.12); border-radius: 10px; }
-QListWidget::item { padding: 6px 8px; border-radius: 6px; color: #cbd0de; }
+QComboBox::drop-down { border: none; background: transparent; width: 22px; border-top-right-radius: 10px; border-bottom-right-radius: 10px; }
+QComboBox QAbstractItemView { background-color: rgba(23, 25, 35, 0.94); border: 1px solid rgba(139, 148, 175, 0.16); border-radius: 10px; padding: 4px; color: #e7e9ee; selection-background-color: rgba(124, 92, 255, 0.28); selection-color: #ffffff; }
+QProgressBar { background-color: rgba(18, 20, 29, 0.6); border: none; border-radius: 4px; height: 8px; }
+QProgressBar::chunk { background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #8b6cff, stop:1 #7c5cff); border-radius: 4px; }
+QListWidget, QPlainTextEdit { background-color: rgba(18, 20, 29, 0.6); border: 1px solid rgba(139, 148, 175, 0.12); border-radius: 12px; }
+QListWidget::item { padding: 7px 9px; border-radius: 7px; color: #cbd0de; }
 QListWidget::item:hover { background-color: rgba(28, 31, 44, 0.9); }
 QListWidget::item:selected { background-color: rgba(42, 47, 64, 0.9); color: #ffffff; }
 QPlainTextEdit { color: #9aa3bd; font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; }
@@ -119,63 +135,66 @@ QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 QSplitter::handle { background: transparent; }
 QSplitter::handle:hover { background: rgba(124, 92, 255, 0.35); }
-QToolTip { background-color: rgba(23, 25, 35, 0.92); color: #e7e9ee; border: 1px solid rgba(139, 148, 175, 0.16); padding: 5px 8px; border-radius: 6px; }
+QToolTip { background-color: rgba(23, 25, 35, 0.94); color: #e7e9ee; border: 1px solid rgba(139, 148, 175, 0.16); padding: 5px 8px; border-radius: 8px; }
 """
 
 LIGHT_QSS = """
 QWidget { background-color: #f4f5f7; color: #1c1e26; font-family: "Figtree", "Segoe UI Variable", "Segoe UI", sans-serif; font-size: 13px; }
 QMainWindow { background-color: #f4f5f7; }
-QLabel#appTitle { font-size: 19px; font-weight: 700; color: #111318; }
-QLabel#titleLabel { font-size: 26px; font-weight: 650; color: #111318; }
+QLabel#appTitle { font-size: 18px; font-weight: 750; color: #111318; letter-spacing: 0.2px; }
+QLabel#titleLabel { font-size: 26px; font-weight: 700; color: #111318; letter-spacing: -0.2px; }
 QLabel#subLabel { color: #6b7280; font-size: 12px; }
 QLabel#versionLabel { color: #9aa0b5; font-size: 10px; letter-spacing: 0.5px; }
-QLabel#captionLabel { color: #6a49e8; font-size: 13px; font-weight: 700; }
-QLabel#sectionLabel { color: #6b7280; font-size: 11px; font-weight: 700; }
-QLabel#statValue { color: #111318; font-size: 22px; font-weight: 700; }
+QLabel#captionLabel { color: #6a49e8; font-size: 13px; font-weight: 700; letter-spacing: 0.3px; }
+QLabel#sectionLabel { color: #6b7280; font-size: 11px; font-weight: 700; letter-spacing: 1.2px; }
+QLabel#statValue { color: #111318; font-size: 22px; font-weight: 750; }
 QLabel#monogram { background-color: #7c5cff; color: #ffffff; border-radius: 10px; font-size: 16px; font-weight: 700; }
 QLabel#avatar { background-color: #c6cbd6; color: #1c1e26; border-radius: 17px; font-size: 15px; font-weight: 700; }
-QLabel#cover { background-color: rgba(248, 249, 251, 0.7); border: 1px solid rgba(0, 0, 0, 0.08); border-radius: 10px; color: #9aa0b5; }
+QLabel#cover { background-color: rgba(248, 249, 251, 0.7); border: 1px solid rgba(0, 0, 0, 0.08); border-radius: 14px; color: #9aa0b5; }
 QLabel#ambient { background-color: transparent; }
-QFrame#preview { background-color: rgba(255, 255, 255, 0.68); border: 1px solid rgba(0, 0, 0, 0.07); border-radius: 16px; }
+QFrame#preview { background-color: rgba(255, 255, 255, 0.78); border: 1px solid rgba(0, 0, 0, 0.08); border-radius: 18px; }
 QLabel#previewDot { color: #15803d; font-size: 12px; }
 QLabel#previewApp { color: #111318; font-size: 13px; font-weight: 700; }
 QLabel#previewStatus { color: #6b7280; font-size: 11px; font-weight: 700; }
-QLabel#previewTitle { font-size: 14px; font-weight: 650; color: #111318; }
+QLabel#previewTitle { font-size: 14px; font-weight: 700; color: #111318; }
 QLabel#previewState { color: #6b7280; font-size: 12px; }
 QLabel#previewTime { color: #9aa0b5; font-size: 11px; }
 QLabel#previewButtons { color: #6a49e8; font-size: 11px; font-weight: 700; }
 QTabWidget::pane { border: none; background: transparent; }
 QTabBar { background: transparent; }
-QTabBar::tab { background-color: rgba(255, 255, 255, 0.45); border: 1px solid rgba(0, 0, 0, 0.06); border-bottom: none; border-top-left-radius: 10px; border-top-right-radius: 10px; padding: 8px 22px; margin-right: 5px; color: #6b7280; }
-QTabBar::tab:selected { background-color: rgba(255, 255, 255, 0.68); border-color: rgba(0, 0, 0, 0.07); color: #111318; }
-QTabBar::tab:hover:!selected { background-color: rgba(236, 238, 243, 0.9); color: #111318; }
-QLabel#chipOk { color: #15803d; background-color: rgba(22, 163, 74, 0.12); padding: 4px 10px; border-radius: 12px; font-weight: 600; font-size: 12px; }
-QLabel#chipBad { color: #b91c1c; background-color: rgba(220, 38, 38, 0.12); padding: 4px 10px; border-radius: 12px; font-weight: 600; font-size: 12px; }
-QFrame#card, QFrame#controls { background-color: rgba(255, 255, 255, 0.68); border: 1px solid rgba(0, 0, 0, 0.07); border-radius: 16px; }
+QTabBar::tab { background-color: rgba(255, 255, 255, 0.55); border: 1px solid rgba(0, 0, 0, 0.07); border-radius: 12px; padding: 8px 20px; margin: 2px 4px 2px 0; color: #6b7280; font-weight: 600; }
+QTabBar::tab:selected { background-color: #7c5cff; border-color: #8b6cff; color: #ffffff; }
+QTabBar::tab:hover:!selected { background-color: rgba(236, 238, 243, 0.95); color: #111318; }
+QLabel#chipOk { color: #15803d; background-color: rgba(22, 163, 74, 0.12); padding: 5px 12px; border-radius: 14px; font-weight: 700; font-size: 12px; }
+QLabel#chipBad { color: #b91c1c; background-color: rgba(220, 38, 38, 0.12); padding: 5px 12px; border-radius: 14px; font-weight: 700; font-size: 12px; }
+QFrame#card, QFrame#controls, QFrame#continueStrip { background-color: rgba(255, 255, 255, 0.8); border: 1px solid rgba(0, 0, 0, 0.08); border-radius: 18px; }
 QFrame#sep { background-color: rgba(0, 0, 0, 0.08); border: none; max-height: 1px; }
-QPushButton { background-color: #7c5cff; color: #ffffff; border: none; border-radius: 8px; padding: 7px 14px; font-weight: 600; }
+QPushButton { background-color: #7c5cff; color: #ffffff; border: none; border-radius: 10px; padding: 7px 15px; font-weight: 700; }
 QPushButton:hover { background-color: #8b6cff; }
 QPushButton:pressed { background-color: #6a4ce0; }
 QPushButton:disabled { background-color: rgba(236, 238, 243, 0.7); color: #9aa0b5; }
-QPushButton#ghost { background-color: rgba(236, 238, 243, 0.72); color: #3b4252; border: 1px solid rgba(0, 0, 0, 0.06); }
-QPushButton#ghost:hover { background-color: rgba(226, 229, 236, 0.9); }
+QPushButton#ghost { background-color: rgba(236, 238, 243, 0.78); color: #3b4252; border: 1px solid rgba(0, 0, 0, 0.07); }
+QPushButton#ghost:hover { background-color: rgba(226, 229, 236, 0.95); color: #111318; }
 QPushButton#ghost[recording="true"] { background-color: rgba(124, 92, 255, 0.22); color: #1c1e26; border-color: #7c5cff; }
+QScrollArea#continueScroller { background: transparent; }
+QToolButton#continueTile { background-color: rgba(236, 238, 243, 0.78); color: #1c1e26; border: 1px solid rgba(0, 0, 0, 0.07); border-radius: 10px; padding: 4px 12px; font-weight: 600; }
+QToolButton#continueTile:hover { background-color: rgba(226, 229, 236, 0.95); border-color: rgba(0, 0, 0, 0.14); }
 QCheckBox { spacing: 9px; color: #374151; }
 QCheckBox::indicator { width: 16px; height: 16px; border-radius: 5px; border: 1.5px solid #c6cbd6; background-color: rgba(255, 255, 255, 0.8); }
 QCheckBox::indicator:hover { border-color: #7c5cff; }
 QCheckBox::indicator:checked { background-color: #7c5cff; border-color: #7c5cff; }
-QLineEdit, QSpinBox, QComboBox { background-color: rgba(255, 255, 255, 0.7); border: 1px solid rgba(0, 0, 0, 0.1); border-radius: 12px; padding: 6px 10px; color: #1c1e26; selection-background-color: #7c5cff; selection-color: #ffffff; }
+QLineEdit, QSpinBox, QComboBox { background-color: rgba(255, 255, 255, 0.85); border: 1px solid rgba(0, 0, 0, 0.1); border-radius: 10px; padding: 6px 10px; color: #1c1e26; selection-background-color: #7c5cff; selection-color: #ffffff; }
 QLineEdit:focus, QSpinBox:focus, QComboBox:focus { border-color: #7c5cff; }
 QLineEdit { placeholder-text-color: #9aa0b5; }
 QComboBox { padding-right: 24px; }
-QComboBox::drop-down { border: none; background: transparent; width: 22px; border-top-right-radius: 12px; border-bottom-right-radius: 12px; }
-QComboBox QAbstractItemView { background-color: rgba(255, 255, 255, 0.96); border: 1px solid rgba(0, 0, 0, 0.1); border-radius: 8px; padding: 4px; color: #1c1e26; selection-background-color: #eceef3; selection-color: #111318; }
-QProgressBar { background-color: rgba(236, 238, 243, 0.8); border: none; border-radius: 5px; height: 10px; }
-QProgressBar::chunk { background-color: #7c5cff; border-radius: 5px; }
-QListWidget, QPlainTextEdit { background-color: rgba(255, 255, 255, 0.7); border: 1px solid rgba(0, 0, 0, 0.07); border-radius: 10px; }
-QListWidget::item { padding: 6px 8px; border-radius: 6px; color: #374151; }
-QListWidget::item:hover { background-color: rgba(244, 245, 247, 0.9); }
-QListWidget::item:selected { background-color: rgba(236, 238, 243, 0.9); color: #111318; }
+QComboBox::drop-down { border: none; background: transparent; width: 22px; border-top-right-radius: 10px; border-bottom-right-radius: 10px; }
+QComboBox QAbstractItemView { background-color: rgba(255, 255, 255, 0.98); border: 1px solid rgba(0, 0, 0, 0.1); border-radius: 10px; padding: 4px; color: #1c1e26; selection-background-color: rgba(124, 92, 255, 0.18); selection-color: #111318; }
+QProgressBar { background-color: rgba(236, 238, 243, 0.8); border: none; border-radius: 4px; height: 8px; }
+QProgressBar::chunk { background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #8b6cff, stop:1 #7c5cff); border-radius: 4px; }
+QListWidget, QPlainTextEdit { background-color: rgba(255, 255, 255, 0.8); border: 1px solid rgba(0, 0, 0, 0.08); border-radius: 12px; }
+QListWidget::item { padding: 7px 9px; border-radius: 7px; color: #374151; }
+QListWidget::item:hover { background-color: rgba(244, 245, 247, 0.95); }
+QListWidget::item:selected { background-color: rgba(236, 238, 243, 0.95); color: #111318; }
 QPlainTextEdit { color: #4b5563; font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; }
 QScrollBar:vertical { background: transparent; width: 8px; margin: 2px; }
 QScrollBar::handle:vertical { background: #d4d8e0; border-radius: 4px; min-height: 30px; }
@@ -186,7 +205,7 @@ QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 QSplitter::handle { background: transparent; }
 QSplitter::handle:hover { background: rgba(124, 92, 255, 0.35); }
-QToolTip { background-color: rgba(255, 255, 255, 0.96); color: #1c1e26; border: 1px solid rgba(0, 0, 0, 0.1); padding: 5px 8px; border-radius: 6px; }
+QToolTip { background-color: rgba(255, 255, 255, 0.98); color: #1c1e26; border: 1px solid rgba(0, 0, 0, 0.1); padding: 5px 8px; border-radius: 8px; }
 """
 
 
@@ -210,8 +229,10 @@ QPushButton { padding: 4px 9px; }
 QCheckBox { spacing: 7px; }
 QLabel#appTitle { font-size: 17px; }
 QLabel#titleLabel { font-size: 22px; }
-QFrame#card, QFrame#controls { border-radius: 10px; }
+QFrame#card, QFrame#controls, QFrame#continueStrip { border-radius: 12px; }
 QLineEdit, QSpinBox, QComboBox { padding: 4px 8px; }
+QTabBar::tab { padding: 6px 16px; }
+QToolButton#continueTile { padding: 3px 9px; }
 """
 
 
@@ -717,7 +738,9 @@ class MainWindow(QMainWindow):
         self._stats_icon_pending = {}    # cover-url -> QListWidgetItem (stats list)
         self._stats_icon_fetching = set()
         self._section_icon_pending = {}  # cover-url -> QListWidgetItem (AniList sections)
-
+        self._section_icon_fetching = set()
+        self._continue_icon_pending = {}  # cover-url -> QToolButton (continue strip)
+        self._continue_icon_fetching = set()
         self._title_drag = None
         # Animated minimize/restore state (see _animated_minimize/_animated_restore).
         self._geom_anim = None
@@ -1145,10 +1168,16 @@ class MainWindow(QMainWindow):
         self.theme_combo.setToolTip("Interface theme. 'System' follows Windows light/dark mode.")
         self.theme_combo.setFixedWidth(88)
         header.addWidget(self.theme_combo)
-        self.accent_btn = QPushButton("Accent")
-        self.accent_btn.setObjectName("ghost")
-        self.accent_btn.setToolTip("Change the accent color")
-        header.addWidget(self.accent_btn)
+        self.accent_combo = QComboBox()
+        for name, hexval in ACCENT_PRESETS:
+            self.accent_combo.addItem(name, hexval)
+        self.accent_combo.addItem("Custom color…", CUSTOM_ACCENT)
+        self.accent_combo.setToolTip(
+            "Accent preset, or 'Custom color…' to pick any color. "
+            "Auto accent (in Settings) overrides this while enabled."
+        )
+        self.accent_combo.setFixedWidth(150)
+        header.addWidget(self.accent_combo)
         header.addSpacing(6)
         for btn in (self.win_min_btn, self.win_max_btn, self.win_close_btn):
             header.addWidget(btn)
@@ -1245,7 +1274,10 @@ class MainWindow(QMainWindow):
         left = QHBoxLayout()          # dashboard row: left column | controls
         left.setContentsMargins(0, 0, 0, 0)
         left.setSpacing(self._gap)
-        dashboard.setLayout(left)
+        dash_root = QVBoxLayout(dashboard)
+        dash_root.setContentsMargins(0, 0, 0, 0)
+        dash_root.setSpacing(self._gap)
+        dash_root.addLayout(left, 1)
 
         left_col = QVBoxLayout()      # card on top, live presence preview below
         left_col.setContentsMargins(0, 0, 0, 0)
@@ -1491,6 +1523,101 @@ class MainWindow(QMainWindow):
 
         c_layout.addStretch(1)
         left.addWidget(controls, 4)
+
+        # "Continue watching": recent titles you can jump straight back to.
+        dash_root.addWidget(self._build_continue_strip())
+
+    # ----------------------------------------------------- continue watching
+    def _build_continue_strip(self):
+        """A horizontal strip of resumable titles, hidden when there are none."""
+        frame = QFrame()
+        frame.setObjectName("continueStrip")
+        frame.setProperty("visible", True)
+        lay = QVBoxLayout(frame)
+        lay.setContentsMargins(self._pad, (12 if not self.cfg.data.compact else 8), self._pad, (12 if not self.cfg.data.compact else 8))
+        lay.setSpacing(8)
+        lay.addWidget(self._field_label("Continue watching"))
+
+        scroller = QScrollArea()
+        scroller.setObjectName("continueScroller")
+        scroller.setWidgetResizable(True)
+        scroller.setFrameShape(QFrame.NoFrame)
+        scroller.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroller.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroller.setFixedHeight(74)
+        self._continue_host = QWidget()
+        self._continue_layout = QHBoxLayout(self._continue_host)
+        self._continue_layout.setContentsMargins(0, 0, 0, 0)
+        self._continue_layout.setSpacing(8)
+        self._continue_layout.addStretch(1)
+        scroller.setWidget(self._continue_host)
+        lay.addWidget(scroller)
+        self._continue_frame = frame
+        self._refresh_continue()
+        return frame
+
+    def _refresh_continue(self):
+        """Rebuild the resume strip from the watch log (called on updates)."""
+        frame = getattr(self, "_continue_frame", None)
+        if frame is None:
+            return
+        entries = self.controller.watchlog.continue_list(8)
+        current_title = ""
+        payload = getattr(self, "_current_payload", None)
+        if payload:
+            current_title = str(payload.get("title") or "").lower()
+
+        # Only touch the widget tree when the resume set actually changed, so
+        # the strip doesn't flicker on every detection poll.
+        fingerprint = tuple(
+            (e.get("title"), e.get("episode"), e.get("url"), e.get("cover"))
+            for e in entries
+            if e.get("url")
+        )
+        if fingerprint == getattr(self, "_continue_fingerprint", None):
+            return
+        self._continue_fingerprint = fingerprint
+
+        # Drop old tiles.
+        while self._continue_layout.count() > 1:  # keep the trailing stretch
+            item = self._continue_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        self._continue_icon_pending.clear()
+
+        for e in entries:
+            title = str(e.get("title") or "").strip()
+            if not title or title.lower() == current_title:
+                continue
+            ep = e.get("episode")
+            url = e.get("url")
+            if not url:
+                continue
+            label = f"Ep {ep} · {title}" if ep else title
+            btn = QToolButton()
+            btn.setText(label)
+            btn.setObjectName("continueTile")
+            btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+            btn.setAutoRaise(True)
+            btn.setToolTip(f"Resume '{title}'" + (f" at episode {ep}" if ep else "") + ("" if self.cfg.data.privacy_mode else f"\n{url}"))
+            btn.clicked.connect(lambda _=False, u=url: webbrowser.open(u))
+            cover = e.get("cover") or ""
+            if cover:
+                cached = self._cover_cache_path(cover)
+                if cached.exists():
+                    btn.setIcon(QIcon(str(cached)))
+                    btn.setIconSize(QSize(30, 42))
+                else:
+                    self._continue_icon_pending[cover] = btn
+                    if cover not in self._continue_icon_fetching:
+                        self._continue_icon_fetching.add(cover)
+                        self._nam.get(QNetworkRequest(QUrl(cover)))
+            self._continue_layout.insertWidget(self._continue_layout.count() - 1, btn)
+
+        # Tiles with covers that haven't arrived yet get fetched lazily in
+        # _on_cover_reply, which swaps the icon in place.
+        frame.setVisible(bool(self._continue_layout.count() > 1))
 
     # --------------------------------------------------------------- stats
     def _build_stats_page(self, margin, compact):
@@ -1893,11 +2020,13 @@ class MainWindow(QMainWindow):
         if choice is act_remove:
             self.controller.watchlog.remove_title(title)
             self._refresh_stats()
+            self._refresh_continue()
             self._log_line(f"Removed '{title}' from stats.")
 
     def _on_clear_stats(self):
         self.controller.watchlog.clear()
         self._refresh_stats()
+        self._refresh_continue()
         self._log_line("Watch-time stats cleared.")
 
     def _on_import_anilist(self):
@@ -1925,6 +2054,7 @@ class MainWindow(QMainWindow):
         self.import_btn.setEnabled(True)
         self.import_btn.setText("Import from AniList")
         self._refresh_stats()
+        self._refresh_continue()
         if message:
             self._notify("AniPresence", message)
 
@@ -2106,7 +2236,7 @@ class MainWindow(QMainWindow):
         self.broadcast_combo.currentIndexChanged.connect(self._on_broadcast_changed)
         self.browser_combo.currentIndexChanged.connect(self._on_browser_changed)
         self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
-        self.accent_btn.clicked.connect(self._on_pick_accent)
+        self.accent_combo.currentIndexChanged.connect(self._on_accent_changed)
         self.backup_btn.clicked.connect(self._on_backup_config)
         self.win_close_btn.clicked.connect(self.close)
         self.win_min_btn.clicked.connect(self._animated_minimize)
@@ -2158,6 +2288,7 @@ class MainWindow(QMainWindow):
             self.browser_combo.setCurrentIndex(BROWSER_INDEX[self.cfg.data.browser])
         with QSignalBlocker(self.theme_combo):
             self.theme_combo.setCurrentIndex(THEME_INDEX.get(self.cfg.data.theme, 0))
+        self._sync_accent_combo()
         with QSignalBlocker(self.broadcast_combo):
             self.broadcast_combo.setCurrentIndex(BROADCAST_INDEX.get(self.cfg.data.rpc_broadcast, 0))
         with QSignalBlocker(self.match_spin):
@@ -2226,21 +2357,48 @@ class MainWindow(QMainWindow):
         self._apply_stylesheet()
         self._rebuild_ui()
 
+    def _on_accent_changed(self, index):
+        data = self.accent_combo.itemData(index)
+        if data == CUSTOM_ACCENT:
+            self._on_pick_accent()
+            return
+        if data:
+            self._apply_accent(data)
+
+    def _apply_accent(self, color):
+        """Pin a fixed accent (preset or picked) and turn auto-accent off."""
+        self.cfg.set(accent=color, auto_accent=False)
+        if self.auto_accent_check is not None:
+            self.auto_accent_check.setChecked(False)
+        self.setWindowIcon(app_icon(64, color))
+        if self._tray:
+            self._tray_base_pm = None
+            self._tray.setIcon(app_icon(64, color))
+            self._update_tray_icon(self._tray_fraction)
+        self._apply_stylesheet()
+        self._sync_accent_combo()
+
+    def _sync_accent_combo(self):
+        """Match the header preset dropdown to the current accent color."""
+        combo = getattr(self, "accent_combo", None)
+        if combo is None:
+            return
+        current = str(self.cfg.data.accent or "").lower()
+        idx = combo.findData(current)
+        if idx < 0:
+            idx = combo.findData(CUSTOM_ACCENT)
+            if idx < 0:
+                return
+        with QSignalBlocker(combo):
+            combo.setCurrentIndex(idx)
+
     def _on_pick_accent(self):
         current = QColor(self.cfg.data.accent)
         if not current.isValid():
             current = QColor("#7c5cff")
         color = QColorDialog.getColor(current, self, "Choose accent color")
         if color.isValid():
-            self.cfg.set(accent=color.name(), auto_accent=False)
-            if self.auto_accent_check is not None:
-                self.auto_accent_check.setChecked(False)
-            self.setWindowIcon(app_icon(64, color.name()))
-            if self._tray:
-                self._tray_base_pm = None
-                self._tray.setIcon(app_icon(64, color.name()))
-                self._update_tray_icon(self._tray_fraction)
-            self._apply_stylesheet()
+            self._apply_accent(color.name())
 
     def _on_startup_toggled(self, on):
         from ..startup import disable_startup, enable_startup
@@ -2290,6 +2448,7 @@ class MainWindow(QMainWindow):
             self.show_placeholder()
         self._update_cover_size()
         self._update_ambient()
+        self._refresh_continue()
         self._update_preview()
         if self.tabbar.currentIndex() == self._stats_tab_index:
             self._refresh_stats()
@@ -2541,6 +2700,7 @@ class MainWindow(QMainWindow):
             )
 
         self._maybe_auto_accent()
+        self._refresh_continue()
         self._update_preview()
 
     # --------------------------------------------------------------- preview
@@ -2674,6 +2834,7 @@ class MainWindow(QMainWindow):
             self._tray_base_pm = None
             self._tray.setIcon(app_icon(64, color))
             self._update_tray_icon(self._tray_fraction)
+        self._sync_accent_combo()
         self._apply_stylesheet()
 
     def _update_ambient(self):
@@ -3001,6 +3162,26 @@ class MainWindow(QMainWindow):
             item = self._section_icon_pending.get(orig)
             pending = self._section_icon_pending
             pending.pop(orig, None)
+        elif orig in self._continue_icon_pending:
+            # Continue-watching tile: a QToolButton, not a list item.
+            self._continue_icon_fetching.discard(orig)
+            btn = self._continue_icon_pending.pop(orig)
+            if reply.error() == QNetworkReply.NoError:
+                data = bytes(reply.readAll())
+                pixmap = QPixmap()
+                if pixmap.loadFromData(data):
+                    cached = self._cover_cache_path(orig)
+                    try:
+                        if not self._cover_cache_dir.exists():
+                            self._cover_cache_dir.mkdir(parents=True, exist_ok=True)
+                        if not cached.exists():
+                            cached.write_bytes(data)
+                    except OSError:
+                        pass
+                    btn.setIcon(QIcon(str(cached)))
+                    btn.setIconSize(QSize(30, 42))
+            reply.deleteLater()
+            return
         else:
             item = None
         if item is not None:

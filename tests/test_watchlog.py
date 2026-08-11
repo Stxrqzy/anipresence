@@ -105,6 +105,28 @@ def test_clear_resets_all_data(log):
     assert log.total_seconds() == 0.0
 
 
+def test_continue_list_newest_first_with_urls(log):
+    log.add("Old", 3, "site", "https://old/3", "https://c/o.jpg", 100.0)
+    log.add("New", 8, "site", "https://new/8", "https://c/n.jpg", 100.0)
+    log.add("NoUrl", 2, "site", "", "", 100.0)
+    cont = log.continue_list(limit=10)
+    assert [t["title"] for t in cont] == ["New", "Old"]
+    assert cont[0]["url"] == "https://new/8"
+    assert cont[0]["episode"] == 8
+
+
+def test_continue_list_respects_limit(log):
+    log.add("A", 1, "site", "https://a/1", "", 100.0)
+    log.add("B", 1, "site", "https://b/1", "", 100.0)
+    log.add("C", 1, "site", "https://c/1", "", 100.0)
+    assert len(log.continue_list(limit=2)) == 2
+
+
+def test_continue_list_empty(log):
+    log.add("NoUrl", 2, "site", "", "", 100.0)
+    assert log.continue_list() == []
+
+
 def test_import_titles_seeds_totals_not_daily(log):
     log.add("A", 1, "site", "u", "", 100.0)
     imported = log.import_titles(

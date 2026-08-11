@@ -60,6 +60,12 @@ from the page title.
 - **Auto accent** — samples a vibrant accent color from the current cover art and
   re-tints the buttons, spinner and tray icon per show. Turn it off under
   Controls (or pick a manual accent) to pin a fixed color.
+- **Accent presets** — a curated palette (Spring Bloom, Summer Sunset, Autumn
+  Ember, Winter Frost, Cherry Blossom, Midnight Violet, Ocean Depths, Forest
+  Dew) sits in the header; pick a preset or "Custom color…" for any color.
+- **Continue watching** — the dashboard shows a strip of titles you've watched
+  before with a one-click *Resume Ep N* jump straight back to the last spot
+  (covers and tooltips included; the current show is hidden from the strip).
 - **Rich Presence preview** — a live mockup of your Discord activity card
   (details, state, elapsed clock, buttons) updates under the dashboard as you
   watch.
@@ -73,6 +79,8 @@ from the page title.
   application ID, broadcast method, browser selection and poll interval, plus
   the less-common knobs: minimum match score, AniList cache lifetime, the Chrome
   debugging port, and the paused / no-video presence behaviours.
+- **Fresh look** — a remodeled dark/light interface: rounded card system,
+  accent-pill tabs, gradient progress, refined chips and buttons.
 
 ---
 
@@ -275,12 +283,13 @@ totals. Covers are cached in `%APPDATA%\AniPresence\covers\`.
 
 **Privacy mode** strips URLs out of the on-screen log (and recent tooltips).
 
-**Accent color & theme**: pick an accent color next to the theme selector
-(picking one disables the auto accent). With **Auto accent from cover art**
-enabled, the accent follows the current show's key art instead. The theme can be
-`Dark`, `Light` or `System` — `System` follows Windows' light/dark app mode and
-even updates live while the app runs. "Compact layout" tightens spacing for
-smaller windows.
+**Accent color & theme**: pick a preset from the dropdown next to the theme
+selector, or choose **Custom color…** to open the picker (either pins the color
+and disables auto accent). With **Auto accent from cover art** enabled, the
+accent follows the current show's key art instead. The theme can be `Dark`,
+`Light` or `System` — `System` follows Windows' light/dark app mode and even
+updates live while the app runs. "Compact layout" tightens spacing for smaller
+windows.
 
 **Start with Windows** registers the packaged exe in the Windows startup (it
 then starts minimized to the tray).

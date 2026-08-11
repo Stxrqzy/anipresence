@@ -211,6 +211,21 @@ class WatchLog:
         )
         return [{"title": name, **data} for name, data in ordered[:limit]]
 
+    def continue_list(self, limit=8):
+        """Titles you can resume, most recently watched first.
+
+        Each entry carries title/episode/url/website/cover so the UI can offer a
+        'Resume Ep N' jump straight back to the last spot. Entries without a
+        resumable URL are skipped.
+        """
+        titles = self.titles()
+        ordered = sorted(
+            (t for t in titles.items() if t[1].get("url")),
+            key=lambda kv: kv[1].get("last_watched") or 0,
+            reverse=True,
+        )
+        return [{"title": name, **data} for name, data in ordered[:limit]]
+
 
 def format_hours(seconds):
     """Format seconds as a compact hours/minutes label."""

@@ -1,7 +1,9 @@
 """Theme stylesheet builder: theme selection, accent and layout flags."""
 from PySide6.QtGui import QColor
 
-from src.ui.app import _accent_variants, build_theme_qss
+from src.ui.app import (
+    ACCENT_PRESETS, _accent_variants, build_theme_qss,
+)
 
 
 def test_dark_and_light_differ():
@@ -72,3 +74,28 @@ def test_hotkey_recording_selector_in_both_themes():
     for theme in ("dark", "light"):
         qss = build_theme_qss(theme)
         assert 'QPushButton#ghost[recording="true"]' in qss
+
+
+def test_accent_presets_are_valid_hex():
+    assert ACCENT_PRESETS, "expected at least one preset"
+    for name, hexval in ACCENT_PRESETS:
+        assert name
+        color = QColor(hexval)
+        assert color.isValid(), f"bad preset color {name}: {hexval}"
+        assert hexval.lower() == hexval  # findData() matching relies on lowercase
+
+
+def test_continue_strip_selectors_in_both_themes():
+    for theme in ("dark", "light"):
+        qss = build_theme_qss(theme)
+        assert "QFrame#continueStrip" in qss
+        assert "QScrollArea#continueScroller" in qss
+        assert "QToolButton#continueTile" in qss
+
+
+def test_selected_tab_uses_accent():
+    # The remodeled tab bar highlights the active tab with the accent color.
+    for theme in ("dark", "light"):
+        qss = build_theme_qss(theme, accent="#ff8800")
+        assert "QTabBar::tab:selected" in qss
+        assert "#ff8800" in qss
