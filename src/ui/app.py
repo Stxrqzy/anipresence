@@ -15,7 +15,9 @@ from PySide6.QtCore import (
     QAbstractNativeEventFilter, QAbstractAnimation, QEasingCurve, QEvent, QPoint,
     QPropertyAnimation, QRect, QRectF, QSignalBlocker, QSize, Qt, QTimer, QUrl,
 )
-from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPen, QPixmap
+from PySide6.QtGui import (
+    QBrush, QColor, QIcon, QImage, QLinearGradient, QPainter, QPen, QPixmap,
+)
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QColorDialog, QComboBox, QDialog, QDialogButtonBox,
@@ -327,6 +329,36 @@ def _sample_accent_color(pixmap):
     s = max(160, min(255, int(s * 1.25)))
     v = 120 if v < 120 else (200 if v > 200 else v)
     return QColor.fromHsv(h, s, v).name()
+
+
+def _ambient_gradient_colors(pixmap):
+    """Sample the cover's dominant top and bottom edge tones for a backdrop
+    gradient. Transparent pixels are skipped; a default cool pair is returned
+    when nothing usable exists."""
+    img = pixmap.toImage().convertToFormat(QImage.Format_ARGB32)
+    if img.isNull():
+        return QColor(30, 32, 42), QColor(18, 19, 26)
+    img = img.scaled(24, 32, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+    width, height = img.width(), img.height()
+
+    def average(rows):
+        r = g = b = n = 0
+        for y in rows:
+            for x in range(width):
+                c = QColor(img.pixel(x, y))
+                if c.alpha() < 128:
+                    continue
+                r += c.red()
+                g += c.green()
+                b += c.blue()
+                n += 1
+        if not n:
+            return None
+        return QColor(r // n, g // n, b // n)
+
+    top = average(range(0, max(1, height // 4))) or QColor(30, 32, 42)
+    bottom = average(range(height * 3 // 4, height)) or QColor(18, 19, 26)
+    return top, bottom
 
 
 def _version_tuple(text):
@@ -1444,6 +1476,26 @@ class MainWindow(QMainWindow):
             grid.addWidget(cb, i // 2, i % 2)
         c_layout.addLayout(grid)
 
+        style_row = QHBoxLayout()
+        style_row.setSpacing(8)
+        style_label = QLabel("Backdrop style")
+        style_label.setObjectName("sectionLabel")
+        style_row.addWidget(style_label)
+        self.cinematic_style_combo = QComboBox()
+        self.cinematic_style_combo.addItem("Frosted blur", "frosted")
+        self.cinematic_style_combo.addItem("Color gradient", "gradient")
+        self.cinematic_style_combo.setToolTip(
+            "How the cinematic backdrop is drawn from the cover art: a blurred, "
+            "milky frost filling the window, or a smooth color gradient sampled "
+            "from the cover's top and bottom tones. Either fills the whole window."
+        )
+        self.cinematic_style_combo.currentIndexChanged.connect(
+            self._on_cinematic_style_changed
+        )
+        style_row.addWidget(self.cinematic_style_combo)
+        style_row.addStretch(1)
+        c_layout.addLayout(style_row)
+
         c_layout.addWidget(self._sep())
 
         c_layout.addWidget(self._field_label("ANILIST ACCOUNT"))
@@ -2445,6 +2497,11 @@ class MainWindow(QMainWindow):
         load(self.idle_check, self.cfg.data.idle_presence)
         load(self.mica_check, self.cfg.data.mica_backdrop)
         load(self.cinematic_check, self.cfg.data.cinematic_backdrop)
+        with QSignalBlocker(self.cinematic_style_combo):
+            self.cinematic_style_combo.setCurrentIndex(
+                max(0, self.cinematic_style_combo.findData(self.cfg.data.cinematic_style))
+            )
+        self.cinematic_style_combo.setEnabled(self.cfg.data.cinematic_backdrop)
         load(self.auto_accent_check, self.cfg.data.auto_accent)
         load(self.hide_adult_check, self.cfg.data.hide_adult_content)
         from ..startup import is_enabled
@@ -2505,7 +2562,15 @@ class MainWindow(QMainWindow):
 
     def _on_cinematic_toggled(self, on):
         self.cfg.set(cinematic_backdrop=on)
+        self.cinematic_style_combo.setEnabled(on)
         self._apply_stylesheet()
+        self._update_ambient()
+
+    def _on_cinematic_style_changed(self, index):
+        style = self.cinematic_style_combo.itemData(index) or "frosted"
+        if self.cfg.data.cinematic_style != style:
+            self.cfg.set(cinematic_style=style)
+        self._ambient_src_version += 1  # drop the cached render for the old style
         self._update_ambient()
 
     def _on_auto_accent_toggled(self, on):
@@ -3004,11 +3069,12 @@ class MainWindow(QMainWindow):
         self._apply_stylesheet()
 
     def _update_ambient(self):
-        """Fill the window behind the UI with the cover as frosted glass (cinematic).
+        """Fill the window behind the UI with the cover (cinematic backdrop).
 
-        The cover is blurred into a full-bleed frosted backdrop that also runs
-        under the title bar, so the top of the window is never a flat black
-        slab. Renders are cached per window size so resizing is cheap.
+        Either style blurs the cover into a frosted full-bleed wall, or paints
+        a color gradient sampled from it; both run under the title bar so the
+        top of the window is never a flat black slab. Renders are cached per
+        window size and style so resizing is cheap.
         """
         ambient = self._ambient
         if ambient is None:
@@ -3026,23 +3092,38 @@ class MainWindow(QMainWindow):
             ambient.hide()
             return
         dpr = self.devicePixelRatio() or 1.0
-        key = (w, h, dpr, self._ambient_src_version)
+        style = self.cfg.data.cinematic_style
+        key = (w, h, dpr, self._ambient_src_version, style)
         if key != getattr(self, "_ambient_cache_key", None):
             self._ambient_cache_key = key
             tw, th = int(w * dpr), int(h * dpr)
-            ambient.setPixmap(self._render_ambient(source, tw, th))
+            ambient.setPixmap(self._render_ambient(source, tw, th, style))
         ambient.setGeometry(0, 0, w, h)
         ambient.lower()
         ambient.show()
 
-    def _render_ambient(self, source, tw, th):
-        """Blur the cover into a frosted-glass wall covering the whole window.
+    def _render_ambient(self, source, tw, th, style="frosted"):
+        """Draw the cinematic backdrop — frosted-glass blur or color gradient.
 
-        The source is collapsed then re-expanded (a cheap gaussian-style blur),
-        drawn full-bleed edge to edge, then veiled with a milky frost so it
-        reads as glass rather than a pixelated blow-up. The layer is dimmed
-        further by the ambient opacity effect, keeping title-bar text legible.
+        The frosted style collapses and re-expands the source (a cheap
+        gaussian-style blur), draws it full-bleed edge to edge, then veils it
+        with a milky frost so it reads as glass rather than a pixelated blow-up.
+        The gradient style samples the cover's top and bottom edge tones and
+        fades smoothly between them down the window. The layer is dimmed further
+        by the ambient opacity effect, keeping title-bar text legible.
         """
+        if style == "gradient":
+            top, bottom = _ambient_gradient_colors(source)
+            out = QPixmap(tw, th)
+            out.fill(Qt.black)
+            p = QPainter(out)
+            grad = QLinearGradient(0, 0, 0, th)
+            grad.setColorAt(0.0, top)
+            grad.setColorAt(1.0, bottom)
+            p.fillRect(out.rect(), QBrush(grad))
+            p.end()
+            return out
+
         out = QPixmap(tw, th)
         out.fill(Qt.black)
         p = QPainter(out)

@@ -47,6 +47,7 @@ class Config:
     idle_presence: bool = False
     mica_backdrop: bool = True
     cinematic_backdrop: bool = True
+    cinematic_style: str = "frosted"     # "frosted" | "gradient" backdrop render
     window_geometry: str = ""        # "x,y,width,height" of the last visible spot
     window_maximized: bool = False
     current_tab: int = 0
