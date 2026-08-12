@@ -122,15 +122,25 @@ class WatchLog:
     def import_titles(self, entries):
         """Seed per-title totals from external history (e.g. AniList import).
 
+        Idempotent: each call replaces the previous import's *imported* seconds
+        (tracked separately per title), so re-importing the same list never
+        double-counts and locally-watched time on the same title is untouched.
         *entries* is a list of dicts with ``title``/``seconds`` (and optional
         episode/website/url/cover). Imported seconds count toward the per-title
         totals and the grand total, but never toward the daily chart or the
         streak — those stay a record of what you actually watched in the app.
         """
-        if not entries:
-            return 0
+        entries = list(entries or [])
         imported = 0
         with self._lock:
+            # 1) Roll back every previous import's contribution exactly, leaving
+            #    real watch time recorded by add() alone.
+            for entry in self._titles.values():
+                prev = float(entry.pop("imported_seconds", 0.0) or 0.0)
+                if prev:
+                    entry["seconds"] = max(0.0, entry.get("seconds", 0.0) - prev)
+                entry.pop("source", None)
+            # 2) Seed the fresh snapshot.
             for item in entries:
                 title = str(item.get("title") or "").strip()
                 seconds = float(item.get("seconds") or 0)
@@ -138,6 +148,8 @@ class WatchLog:
                     continue
                 entry = self._titles.setdefault(title, {"seconds": 0.0, "days": {}})
                 entry["seconds"] = entry.get("seconds", 0.0) + seconds
+                entry["imported_seconds"] = float(entry.get("imported_seconds", 0.0)) + seconds
+                entry["source"] = "anilist"
                 if item.get("episode"):
                     entry["episode"] = item["episode"]
                 if item.get("website"):
@@ -148,6 +160,11 @@ class WatchLog:
                     entry["cover"] = item["cover"]
                 entry.setdefault("last_watched", time.time())
                 imported += seconds
+            # 3) Titles with no watch time left at all (never watched locally,
+            #    and no longer listed) disappear from the stats.
+            for title in [t for t, e in self._titles.items()
+                          if e.get("seconds", 0.0) <= 0 and not (e.get("days") or {})]:
+                del self._titles[title]
             self._save()
         return imported
 

@@ -112,7 +112,7 @@ class Controller:
             chrome_path=cfg.data.chrome_path,
             browser=cfg.data.browser,
         )
-        self.registry = DetectorRegistry()
+        self.registry = DetectorRegistry(custom_sites=cfg.data.custom_sites)
         self.anilist = AniListClient()
         self.cache = AniCache(ttl_days=cfg.data.anilist_cache_ttl_days, path=APP_DIR / "anilist_cache.json")
         self.discord = DiscordClient()
@@ -155,6 +155,22 @@ class Controller:
         self._watch_meta = {}                      # key -> (title, episode, website, url, cover)
         self._last_recent_emit = 0.0
 
+    def set_custom_sites(self, sites):
+        """Replace the user-defined anime-site list and sync the detectors.
+
+        Persists the cleaned list (dropping empty name/host entries) and makes
+        the running detection registry pick it up immediately.
+        """
+        cleaned = []
+        for entry in sites or []:
+            name = str(entry.get("name") or "").strip()
+            host = str(entry.get("host") or "").strip()
+            if name and host:
+                cleaned.append({"name": name, "host": host})
+        self.registry.set_custom_sites(cleaned)
+        self.cfg.set(custom_sites=cleaned)
+        return cleaned
+
     # ------------------------------------------------------------------ run
     def run(self):
         """Main loop - runs on the worker QThread."""
@@ -181,6 +197,12 @@ class Controller:
                 self.bridge.log.emit(
                     f"Browser-extension bridge could not open port {self.extension.port}."
                 )
+        # Keep the Stats tab in sync with the user's public AniList list on
+        # every launch (idempotent: re-import replaces, never double-adds).
+        username = self._active_account or (self.cfg.data.anilist_username or "").strip()
+        if username:
+            self.bridge.log.emit(f"Syncing AniList watch list for {username}…")
+            self.import_anilist_history(username)
         while not self.stop_event.is_set():
             try:
                 self._tick()

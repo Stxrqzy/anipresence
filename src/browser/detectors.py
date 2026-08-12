@@ -457,6 +457,21 @@ KNOWN_SITES = [
 ]
 
 
+def _generic_detect(ctx, site_name):
+    """Generic page-title + URL-slug extraction shared by known/custom sites."""
+    title, ep = _extract_title_episode_from_page_title(ctx.document_title)
+    source = "page"
+    if not title:
+        segments = [s for s in ctx.path.split("/") if s]
+        if segments:
+            title = clean_slug(segments[-1])
+            source = "slug"
+    if not title:
+        return None
+    return Detection(site_name, ctx.url, raw_title=ctx.document_title,
+                     cleaned_title=title, episode=ep, source=source)
+
+
 class GenericKnownSiteDetector(BaseDetector):
     """Best-effort extraction for sites covered only by KNOWN_SITES."""
     name = "GenericAnimeSite"
@@ -469,17 +484,52 @@ class GenericKnownSiteDetector(BaseDetector):
         return ctx.host.split(".")[-2].title() if ctx.host else "Anime Site"
 
     def detect(self, ctx):
-        title, ep = _extract_title_episode_from_page_title(ctx.document_title)
-        source = "page"
-        if not title:
-            segments = [s for s in ctx.path.split("/") if s]
-            if segments:
-                title = clean_slug(segments[-1])
-                source = "slug"
-        if not title:
-            return None
-        return Detection(self._site_name(ctx), ctx.url, raw_title=ctx.document_title,
-                         cleaned_title=title, episode=ep, source=source)
+        return _generic_detect(ctx, self._site_name(ctx))
+
+
+def make_custom_host_pattern(host):
+    """Turn a user-supplied domain (``myanime.to``) into a host regex that also
+    matches any subdomain. Returns ``None`` when *host* is unusable."""
+    host = re.sub(r"^https?://", "", (host or "").strip().lower())
+    host = host.split("/")[0].strip(".")
+    if not host or not re.match(r"^[a-z0-9]([a-z0-9.-]+)?[a-z0-9]$", host):
+        return None
+    return re.compile(r"(?:^|\.)" + re.escape(host) + r"$")
+
+
+class CustomSiteDetector(BaseDetector):
+    """Best-effort extraction for streaming sites the user adds in Settings.
+
+    Host matching is identical to :class:`GenericKnownSiteDetector`; only the
+    display name comes from the user (or the domain when no name is given).
+    """
+    name = "CustomSite"
+    hosts = []
+
+    def __init__(self, sites=None):
+        self.sites = []  # [("name", re.Pattern), ...]
+        self.set_sites(sites or [])
+
+    def set_sites(self, sites):
+        self.sites = []
+        self.hosts = []
+        for entry in sites or []:
+            name = str(entry.get("name") or "").strip()
+            host = str(entry.get("host") or "").strip()
+            pattern = make_custom_host_pattern(host)
+            if not pattern:
+                continue
+            self.sites.append(((name or host.split(".")[-2].title()), pattern))
+            self.hosts.append(pattern)
+
+    def _site_name(self, ctx):
+        for name, pattern in self.sites:
+            if pattern.search(ctx.host):
+                return name
+        return ctx.host.split(".")[-2].title() if ctx.host else "Custom Site"
+
+    def detect(self, ctx):
+        return _generic_detect(ctx, self._site_name(ctx))
 
 
 # --------------------------------------------------------------------------- #
@@ -488,7 +538,7 @@ class GenericKnownSiteDetector(BaseDetector):
 class DetectorRegistry:
     """Ordered list of detectors; the first matching site wins."""
 
-    def __init__(self):
+    def __init__(self, custom_sites=None):
         self.detectors = [
             CrunchyrollDetector(),
             HidiveDetector(),
@@ -501,7 +551,12 @@ class DetectorRegistry:
             MiruroDetector(),
             BilibiliDetector(),
             GenericKnownSiteDetector(),
+            CustomSiteDetector(custom_sites),
         ]
+
+    def set_custom_sites(self, sites):
+        """Replace the user-added site list; detection picks it up on the next poll."""
+        self.detectors[-1].set_sites(sites)
 
     def detect(self, ctx):
         """Return the first successful :class:`Detection`, or None."""

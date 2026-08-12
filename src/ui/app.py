@@ -1932,6 +1932,56 @@ class MainWindow(QMainWindow):
         cc.addLayout(grid)
         layout.addWidget(conn)
 
+        # -- Custom anime sites ---------------------------------------------
+        custom = QFrame()
+        custom.setObjectName("card")
+        cm = QVBoxLayout(custom)
+        cm.setContentsMargins(self._pad, self._pad, self._pad, self._pad)
+        cm.setSpacing(10)
+        cm.addWidget(self._field_label("CUSTOM ANIME SITES"))
+        hint = QLabel(
+            "Streaming sites AniPresence doesn't know yet. Detection reads the "
+            "page title and URL (e.g. episode number), just like the built-in "
+            "generic sites — so add the domain and a display name."
+        )
+        hint.setObjectName("subLabel")
+        hint.setWordWrap(True)
+        cm.addWidget(hint)
+
+        self._custom_sites = [dict(s) for s in (self.cfg.data.custom_sites or [])]
+        self.custom_sites_view = QListWidget()
+        self.custom_sites_view.setMaximumHeight(110)
+        self.custom_sites_view.itemClicked.connect(self._on_custom_site_pick)
+        cm.addWidget(self.custom_sites_view)
+
+        add_row = QHBoxLayout()
+        add_row.setSpacing(8)
+        self.custom_name_edit = QLineEdit()
+        self.custom_name_edit.setPlaceholderText("Site name, e.g. MyAnimeHub")
+        self.custom_host_edit = QLineEdit()
+        self.custom_host_edit.setPlaceholderText("Domain, e.g. myanimehub.to")
+        self.custom_host_edit.returnPressed.connect(self._on_add_custom_site)
+        add_btn = QPushButton("Add site")
+        add_btn.setObjectName("ghost")
+        add_btn.setToolTip("Add this site to the detector list (saves immediately).")
+        add_btn.clicked.connect(self._on_add_custom_site)
+        add_row.addWidget(self.custom_name_edit, 1)
+        add_row.addWidget(self.custom_host_edit, 1)
+        add_row.addWidget(add_btn)
+        cm.addLayout(add_row)
+
+        del_row = QHBoxLayout()
+        del_row.addStretch(1)
+        self.custom_del_btn = QPushButton("Remove selected")
+        self.custom_del_btn.setObjectName("ghost")
+        self.custom_del_btn.setToolTip("Stop detecting the selected site.")
+        self.custom_del_btn.setEnabled(False)
+        self.custom_del_btn.clicked.connect(self._on_remove_custom_site)
+        del_row.addWidget(self.custom_del_btn)
+        cm.addLayout(del_row)
+        self._refresh_custom_sites()
+        layout.addWidget(custom)
+
         # -- Misc settings --------------------------------------------------
         misc = QFrame()
         misc.setObjectName("card")
@@ -2050,6 +2100,46 @@ class MainWindow(QMainWindow):
 
     def _on_port_changed(self, value):
         self.cfg.set(chrome_debugging_port=value)
+
+    def _refresh_custom_sites(self):
+        view = self.custom_sites_view
+        view.clear()
+        for entry in self._custom_sites:
+            name = entry.get("name") or ""
+            host = entry.get("host") or ""
+            view.addItem(f"{name}  ({host})")
+        if self.custom_del_btn is not None:
+            self.custom_del_btn.setEnabled(view.currentRow() >= 0)
+
+    def _on_custom_site_pick(self, _item):
+        if self.custom_del_btn is not None:
+            self.custom_del_btn.setEnabled(True)
+
+    def _on_add_custom_site(self):
+        name = self.custom_name_edit.text().strip()
+        host = self.custom_host_edit.text().strip()
+        if not name or not host:
+            self._notify("AniPresence", "Enter both a site name and a domain.")
+            return
+        self._custom_sites.append({"name": name, "host": host})
+        self._persist_custom_sites()
+        self.custom_name_edit.clear()
+        self.custom_host_edit.clear()
+        self.custom_name_edit.setFocus()
+
+    def _on_remove_custom_site(self):
+        row = self.custom_sites_view.currentRow()
+        if row < 0 or row >= len(self._custom_sites):
+            return
+        del self._custom_sites[row]
+        self._persist_custom_sites()
+
+    def _persist_custom_sites(self):
+        self._custom_sites = self.controller.set_custom_sites(self._custom_sites)
+        self._refresh_custom_sites()
+        self._log_line(
+            f"Custom sites: {', '.join(s['name'] for s in self._custom_sites) or 'none'}."
+        )
 
     def _stats_menu(self, pos):
         item = self._stats_list.itemAt(pos)
