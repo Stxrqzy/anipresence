@@ -726,9 +726,6 @@ class MainWindow(QMainWindow):
         self._cover_requested = False
         self._cover_pixmap = None
         self._ambient = None          # cinematic backdrop QLabel (full-window)
-        self._banner_url = ""         # AniList banner used as the HD backdrop source
-        self._backdrop_pixmap = None  # high-res backdrop source (banner preferred)
-        self._banner_fetching = False
         self._ambient_src_version = 0  # bumps whenever the backdrop source changes
         self._ambient_cache_key = None
         self._left_pane = None
@@ -1094,9 +1091,10 @@ class MainWindow(QMainWindow):
         outer.setSpacing(0)
         self.setCentralWidget(central)
 
-        # Cinematic backdrop: a dimmed full-window copy of the cover art that
-        # sits behind everything. It's only visible when the base window fills
-        # are translucent (see _apply_stylesheet) and a cover is loaded.
+        # Cinematic backdrop: the cover art blurred into a frosted full-window
+        # wall that sits behind everything (title bar included). It's only
+        # visible when the base window fills are translucent (see
+        # _apply_stylesheet) and a cover is loaded.
         self._ambient = QLabel(central)
         self._ambient.setObjectName("ambient")
         self._ambient.setAttribute(Qt.WA_TransparentForMouseEvents)
@@ -2419,8 +2417,6 @@ class MainWindow(QMainWindow):
         self.cfg.set(cinematic_backdrop=on)
         self._apply_stylesheet()
         self._update_ambient()
-        if on and self._banner_url and self._backdrop_pixmap is None:
-            self._request_banner(self._banner_url)
 
     def _on_auto_accent_toggled(self, on):
         self.cfg.set(auto_accent=on)
@@ -2779,11 +2775,6 @@ class MainWindow(QMainWindow):
                 )
             )
 
-        banner = payload.get("banner_url") or ""
-        if banner != self._banner_url:
-            self._banner_url = banner
-            self._request_banner(banner)
-
         self._maybe_auto_accent()
         self._refresh_continue()
         self._update_preview()
@@ -2923,12 +2914,11 @@ class MainWindow(QMainWindow):
         self._apply_stylesheet()
 
     def _update_ambient(self):
-        """Fill the window behind the UI with art (cinematic mode).
+        """Fill the window behind the UI with the cover as frosted glass (cinematic).
 
-        Prefers the wide, high-resolution AniList banner when one is available;
-        otherwise the portrait cover is upscaled through a soft blur + darken so
-        it reads as an intentional backdrop instead of a pixelated blow-up. The
-        rendered pixmap is cached per window size so resizing is cheap.
+        The cover is blurred into a full-bleed frosted backdrop that also runs
+        under the title bar, so the top of the window is never a flat black
+        slab. Renders are cached per window size so resizing is cheap.
         """
         ambient = self._ambient
         if ambient is None:
@@ -2936,7 +2926,7 @@ class MainWindow(QMainWindow):
         if not self.cfg.data.cinematic_backdrop:
             ambient.hide()
             return
-        source = self._backdrop_pixmap or self._cover_pixmap
+        source = self._cover_pixmap
         if source is None or source.isNull():
             ambient.hide()
             return
@@ -2946,41 +2936,36 @@ class MainWindow(QMainWindow):
             ambient.hide()
             return
         dpr = self.devicePixelRatio() or 1.0
-        blurred = self._backdrop_pixmap is None  # cover upscales get softened
-        key = (w, h, dpr, self._ambient_src_version, blurred)
+        key = (w, h, dpr, self._ambient_src_version)
         if key != getattr(self, "_ambient_cache_key", None):
             self._ambient_cache_key = key
             tw, th = int(w * dpr), int(h * dpr)
-            ambient.setPixmap(self._render_ambient(source, tw, th, blurred))
+            ambient.setPixmap(self._render_ambient(source, tw, th))
         ambient.setGeometry(0, 0, w, h)
         ambient.lower()
         ambient.show()
 
-    def _render_ambient(self, source, tw, th, blurred):
-        """Scale *source* onto a ``tw x th`` device-pixel canvas.
+    def _render_ambient(self, source, tw, th):
+        """Blur the cover into a frosted-glass wall covering the whole window.
 
-        Banner sources are fit whole inside the window (centered, letterboxed)
-        so the backdrop isn't a zoomed crop. Cover fallbacks collapse and
-        re-expand (a cheap gaussian-style blur) into a full-bleed darkened fill
-        so a small portrait never looks jagged.
+        The source is collapsed then re-expanded (a cheap gaussian-style blur),
+        drawn full-bleed edge to edge, then veiled with a milky frost so it
+        reads as glass rather than a pixelated blow-up. The layer is dimmed
+        further by the ambient opacity effect, keeping title-bar text legible.
         """
         out = QPixmap(tw, th)
         out.fill(Qt.black)
         p = QPainter(out)
         p.setRenderHint(QPainter.SmoothPixmapTransform)
-        if blurred:
-            small = source.scaled(
-                max(1, tw // 12), max(1, th // 12),
-                Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation,
-            )
-            src = small.scaled(tw, th, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-            x = (src.width() - tw) // 2
-            y = (src.height() - th) // 2
-            p.drawPixmap(0, 0, src, x, y, tw, th)
-            p.fillRect(out.rect(), QColor(0, 0, 0, 150))  # keep UI text readable
-        else:
-            src = source.scaled(tw, th, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            p.drawPixmap((tw - src.width()) // 2, (th - src.height()) // 2, src)
+        small = source.scaled(
+            max(1, tw // 10), max(1, th // 10),
+            Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation,
+        )
+        src = small.scaled(tw, th, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+        x = (src.width() - tw) // 2
+        y = (src.height() - th) // 2
+        p.drawPixmap(0, 0, src, x, y, tw, th)
+        p.fillRect(out.rect(), QColor(255, 255, 255, 60))  # frosted-glass veil
         p.end()
         return out
 
@@ -3240,51 +3225,6 @@ class MainWindow(QMainWindow):
         self._cover_spinner.show()
         request = QNetworkRequest(QUrl(url))
         self._nam.get(request)
-
-    def _request_banner(self, url):
-        """Fetch the wide AniList banner for the cinematic backdrop (cached)."""
-        if not url:
-            if self._backdrop_pixmap is not None:
-                self._backdrop_pixmap = None
-                self._ambient_src_version += 1
-            self._update_ambient()
-            return
-        cached = self._cover_cache_path(url)
-        if cached.exists():
-            pixmap = QPixmap(str(cached))
-            if not pixmap.isNull():
-                self._backdrop_pixmap = pixmap
-                self._ambient_src_version += 1
-                self._update_ambient()
-                return
-        if self._banner_fetching:
-            return
-        self._banner_fetching = True
-        # Dedicated manager so the reply never routes through _on_cover_reply.
-        nam = QNetworkAccessManager(self)
-        req = QNetworkRequest(QUrl(url))
-        reply = nam.get(req)
-
-        def on_reply():
-            self._banner_fetching = False
-            if reply.error() == QNetworkReply.NoError:
-                data = bytes(reply.readAll())
-                pixmap = QPixmap()
-                if pixmap.loadFromData(data):
-                    try:
-                        if not self._cover_cache_dir.exists():
-                            self._cover_cache_dir.mkdir(parents=True, exist_ok=True)
-                        cached = self._cover_cache_path(url)
-                        if not cached.exists():
-                            cached.write_bytes(data)
-                    except OSError:
-                        pass
-                    self._backdrop_pixmap = pixmap
-                    self._ambient_src_version += 1
-                    self._update_ambient()
-            reply.deleteLater()
-
-        reply.finished.connect(on_reply)
 
     def _on_cover_reply(self, reply):
         orig = reply.request().url().toString()
@@ -3559,7 +3499,6 @@ class MainWindow(QMainWindow):
         self.cover_label.clear()
         self.cover_label.setText("Manual")
         self._cover_pixmap = None
-        self._backdrop_pixmap = None
         self._ambient_src_version += 1
         self._cover_spinner.hide()
         self.open_site_btn.setEnabled(False)
@@ -3683,8 +3622,6 @@ class MainWindow(QMainWindow):
         self.cover_label.clear()
         self.cover_label.setText("Cover")
         self._cover_pixmap = None
-        self._backdrop_pixmap = None
-        self._banner_url = ""
         self._ambient_src_version += 1
         self._cover_spinner.hide()
         self.open_site_btn.setEnabled(False)

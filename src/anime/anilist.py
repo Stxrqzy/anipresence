@@ -23,7 +23,6 @@ query ($search: String, $perPage: Int) {
       title { romaji english native }
       synonyms
       coverImage { extraLarge large }
-      bannerImage
       description(asHtml: false)
       siteUrl
       episodes
@@ -46,7 +45,6 @@ query ($id: Int) {
     title { romaji english native }
     synonyms
     coverImage { extraLarge large }
-    bannerImage
     description(asHtml: false)
     siteUrl
     episodes
@@ -74,7 +72,6 @@ query ($name: String) {
           id
           title { romaji english native }
           coverImage { extraLarge large }
-          bannerImage
           siteUrl
           episodes
           season
@@ -116,7 +113,6 @@ class Media:
     synonyms: list = field(default_factory=list)
     cover_large: str = ""
     cover_extra_large: str = ""
-    banner: str = ""
     description: str = ""
     site_url: str = ""
     episodes: Optional[int] = None
@@ -151,7 +147,6 @@ class Media:
             cover_extra_large=(
                 cover.get("extraLarge") if not flat else d.get("cover_extra_large")
             ) or "",
-            banner=(d.get("bannerImage") if not flat else d.get("banner")) or "",
             description=d.get("description") or "",
             site_url=d.get("siteUrl") or d.get("site_url") or "",
             episodes=d.get("episodes"),

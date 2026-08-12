@@ -943,7 +943,6 @@ class Controller:
             "paused": video.paused,
             "cover_url": media.cover_extra_large or media.cover_large if media else "",
             "cover_extra_url": media.cover_extra_large if media else "",
-            "banner_url": media.banner if media else "",
             "anilist_url": media.site_url if media else "",
             "anilist_title": title,
             "match_confidence": self._current.confidence,
