@@ -405,17 +405,35 @@ config/logs/cache in `%APPDATA%\AniPresence\`, so the folder is portable.
 
 ### Making an installer
 
-Once the exe is built, compile the Inno Setup script (requires Inno Setup 6,
-[jrsoftware.org](https://jrsoftware.org/isinfo.php)):
+`scripts\build.ps1` runs both steps and keeps the version in sync:
+the version is read from `src\__init__.py` and injected into Inno Setup via
+`/DMyAppVersion`. Run it from PowerShell:
 
 ```powershell
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" AniPresence.iss
+powershell -ExecutionPolicy Bypass -File scripts\build.ps1
 ```
 
 This produces `installer\AniPresence-Setup-<version>.exe` — a per-user
 installer (no admin needed) with Start-menu/desktop shortcuts and uninstall.
-The version comes from `src/__init__.py`; override with
-`/DMyAppVersion=x.y.z`.
+(It also deletes the runtime `settings.json` artifacts from `dist` so the
+bridge token is never packaged.)
+
+To step through manually, first build the exe:
+
+```powershell
+pip install -r requirements.txt pyinstaller
+python -m PyInstaller --noconfirm AniPresence.spec
+```
+
+Then compile the Inno Setup script (requires Inno Setup 6,
+[jrsoftware.org](https://jrsoftware.org/isinfo.php)) — without the script the
+`.iss` uses its hardcoded `MyAppVersion` fallback, so pass one explicitly to
+keep it in sync:
+
+```powershell
+# e.g. ISCC.exe with Inno Setup installed elsewhere
+& "C:\Users\tnahe\AppData\Local\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=1.9.5 AniPresence.iss
+```
 
 ---
 
