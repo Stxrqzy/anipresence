@@ -6,6 +6,7 @@ extracted title rarely has to match perfectly. Rate limits are handled by
 retrying once with backoff; results are cached on disk by the caller.
 """
 import logging
+import re
 from dataclasses import asdict, dataclass, field
 from typing import Optional
 
@@ -169,22 +170,37 @@ class Media:
     def display_title(self):
         return self.title_romaji or self.title_english or self.title_native
 
-    # Terms that mark content as unsuitable for a public Discord status even when
-    # AniList's own isAdult flag is off (e.g. ecchi is "PG-13+" but NSFW-adjacent).
-    _ADULT_TERMS = (
+    # Genres are a small controlled vocabulary on AniList, so scanning them
+    # broadly is safe: in practice only "Ecchi" (or a full hentai title) ever
+    # matches, and no mainstream show gets a genre that trips these.
+    _ADULT_GENRE_TERMS = (
         "hentai", "ecchi", "erotica", "erotic", "adult", "porn",
         "sex", "smut", "nudity", "nsfw",
     )
+
+    # Tags are free-form and include generic content warnings ("Nudity",
+    # "Sexual Violence", "Adult Cast", "Gore"...) that mainstream shows like
+    # Vinland Saga carry. Only unambiguous NSFW markers are matched there;
+    # anything else would hide non-adult anime. AniList's own isAdult flag is
+    # the authoritative signal for true 18+ content.
+    _ADULT_TAG_TERMS = ("ecchi", "hentai", "smut", "nsfw")
 
     def is_adult_content(self):
         """True when the title is 18+ or ecchi/NSFW-adjacent."""
         if self.is_adult:
             return True
-        haystack = " ".join(self.genres).lower()
+        genres = " ".join(self.genres).lower()
         for tag in self.tags:
             name = (tag.get("name") or "") if isinstance(tag, dict) else str(tag)
-            haystack += " " + name.lower()
-        return any(term in haystack for term in self._ADULT_TERMS)
+            if any(
+                re.search(rf"\b{re.escape(term)}\b", name.lower())
+                for term in self._ADULT_TAG_TERMS
+            ):
+                return True
+        return any(
+            re.search(rf"\b{re.escape(term)}\b", genres)
+            for term in self._ADULT_GENRE_TERMS
+        )
 
 
 class AniListClient:

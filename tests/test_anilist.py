@@ -22,11 +22,36 @@ def _media(**kw):
         ({"genres": ["Ecchi"]}, True),
         ({"genres": ["Action"], "tags": [{"name": "Ecchi", "isAdult": False}]}, True),
         ({"genres": ["Hentai"]}, True),
-        ({"genres": ["Adult"]}, True),
         ({"tags": ["NSFW"]}, True),
         ({"genres": ["Action", "Adventure"]}, False),
         ({"tags": [{"name": "Action", "isAdult": False}]}, False),
         ({"genres": ["Comedy"], "tags": ["School Life"]}, False),
+        # "Adult" alone must not flag: the tag "Adult Cast" is common on
+        # mainstream workplace/slice-of-life anime.
+        ({"genres": ["Drama"], "tags": ["Adult Cast"]}, False),
+        # Content-warning tags are not 18+: Vinland Saga carries "Sexual
+        # Violence" but is a mainstream seinen, not hentai.
+        (
+            {"genres": ["Action", "Drama", "Adventure"], "tags": ["Seinen", "Historical", "Sexual Violence", "Gore"]},
+            False,
+        ),
+        # Vinland Saga's full real tag set (incl. the "Nudity" warning tag)
+        # must not flag: "Nudity" is a generic content warning shared with
+        # mainstream shows, not a marker of adult content.
+        (
+            {
+                "genres": ["Action", "Adventure", "Drama"],
+                "tags": [
+                    "Vikings", "Seinen", "Historical", "Military", "Gore",
+                    "Nudity", "Slavery", "Revenge", "Primarily Adult Cast",
+                ],
+            },
+            False,
+        ),
+        # An ecchi title with no genre but the unambiguous tag is still caught.
+        ({"genres": ["Comedy"], "tags": ["Ecchi", "School"]}, True),
+        # "sex" must not match inside "asexual"/"sexual" as a substring.
+        ({"tags": ["Asexual", "Sexual Violence"]}, False),
     ],
 )
 def test_is_adult_content(kwargs, expected):
