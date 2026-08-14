@@ -1049,10 +1049,20 @@ class Controller:
         if not cover:
             cover = None
 
+        now_ts = int(time.time())
         start = int(session.session_start)
         end = None
-        if not video.paused and video.duration > 0:
-            end = int(time.time() + max(0, video.duration - video.current_time))
+        if video.duration > 0:
+            # Anchor both timestamps to the video's own timeline (position-based):
+            # start = when the video would have started to sit at the current
+            # position. Seeking forward or backward then never shrinks/stretches
+            # the episode - Discord always renders it at its real length. A
+            # fixed session_start alone would make end - start shrink by every
+            # skipped second (e.g. a 24-min episode shows as 12 min after a
+            # jump to the halfway mark).
+            position = max(0.0, video.current_time)
+            start = now_ts - int(position)
+            end = now_ts + int(max(0.0, video.duration - position))
 
         buttons = [{"label": "Watch Anime", "url": detection.url}]
         if media and media.site_url:

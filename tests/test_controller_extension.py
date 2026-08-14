@@ -147,6 +147,53 @@ def test_negative_anilist_cache_expires(tmp_path, app, monkeypatch):
     assert searches["n"] > n_after_first
 
 
+def test_sync_presence_timestamps_anchor_to_position(tmp_path, app, monkeypatch):
+    """Seeking must not shrink the episode: end - start always equals the real
+    duration because both timestamps are anchored to the video position, not to
+    the wall-clock moment the session started."""
+    from src.browser.detectors import Detection
+    from src.core.controller import CurrentSession
+
+    ctrl = make_controller(tmp_path)
+    cfg = ctrl.cfg.data
+    cfg.rpc_enabled = True
+    cfg.rpc_broadcast = "discord"
+    cfg.discord_application_id = "1111111111"
+
+    sent = {}
+
+    def fake_send(details, state, cover, title, start, end, buttons):
+        sent.update(details=details, state=state, start=start, end=end)
+
+    monkeypatch.setattr(ctrl, "_send_rpc", fake_send)
+    monkeypatch.setattr(ctrl, "_set_discord_status", lambda *a, **k: None)
+
+    def make_session(position):
+        detection = Detection(
+            website="GoGoAnime",
+            url="https://gogoanime.example/watch/demon-slayer-episode-5",
+            raw_title="Demon Slayer - Watch Episode 5",
+            cleaned_title="Demon Slayer",
+            episode=5,
+            video=VideoState(has_video=True, current_time=position, duration=1440.0, paused=False),
+        )
+        return CurrentSession(detection, None, 100.0, time.time() - 120.0, "key")
+
+    ctrl._current = make_session(0.0)
+    ctrl._last_sent = None
+    ctrl._sync_presence()
+    start0, end0 = sent["start"], sent["end"]
+    assert end0 - start0 == 1440  # full 24-minute episode
+
+    # Jump to the halfway mark (12:00) - the reported glitch.
+    ctrl._current = make_session(720.0)
+    sent.clear()
+    ctrl._sync_presence()
+    start1, end1 = sent["start"], sent["end"]
+    assert end1 - start1 == 1440  # still the full 24 minutes
+    assert abs((int(time.time()) - start1) - 720) < 3  # elapsed tracks the position
+
+
 def test_full_http_roundtrip(tmp_path, app, monkeypatch):
     ctrl = make_controller(tmp_path)
     monkeypatch.setattr(ctrl, "_resolve_anime", lambda detection: (None, 0.0))
