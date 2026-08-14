@@ -17,6 +17,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QBrush, QColor, QIcon, QImage, QLinearGradient, QPainter, QPen, QPixmap,
+    QRadialGradient,
 )
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (
@@ -331,20 +332,26 @@ def _sample_accent_color(pixmap):
     return QColor.fromHsv(h, s, v).name()
 
 
-def _ambient_gradient_colors(pixmap):
-    """Sample the cover's dominant top and bottom edge tones for a backdrop
-    gradient. Transparent pixels are skipped; a default cool pair is returned
-    when nothing usable exists."""
-    img = pixmap.toImage().convertToFormat(QImage.Format_ARGB32)
-    if img.isNull():
-        return QColor(30, 32, 42), QColor(18, 19, 26)
-    img = img.scaled(24, 32, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
-    width, height = img.width(), img.height()
+def _ambient_box_colors(pixmap, boxes):
+    """Average the cover art inside each normalized box.
 
-    def average(rows):
+    ``boxes`` is a list of ``((x0, y0, x1, y1), default)`` pairs where the
+    coordinates are fractions of the (small) sampled image (0..1). Transparent
+    pixels are skipped; the per-box default color is returned when a box is
+    empty or the source is unusable.
+    """
+    img = pixmap.toImage().convertToFormat(QImage.Format_ARGB32)
+    out = []
+    if img.isNull():
+        return [default for _box, default in boxes]
+    img = img.scaled(24, 32, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+    w, h = img.width(), img.height()
+    for (fx0, fy0, fx1, fy1), default in boxes:
+        x0, y0 = int(w * fx0), int(h * fy0)
+        x1, y1 = max(x0 + 1, int(w * fx1)), max(y0 + 1, int(h * fy1))
         r = g = b = n = 0
-        for y in rows:
-            for x in range(width):
+        for y in range(y0, y1):
+            for x in range(x0, x1):
                 c = QColor(img.pixel(x, y))
                 if c.alpha() < 128:
                     continue
@@ -352,13 +359,24 @@ def _ambient_gradient_colors(pixmap):
                 g += c.green()
                 b += c.blue()
                 n += 1
-        if not n:
-            return None
-        return QColor(r // n, g // n, b // n)
+        out.append(QColor(r // n, g // n, b // n) if n else default)
+    return out
 
-    top = average(range(0, max(1, height // 4))) or QColor(30, 32, 42)
-    bottom = average(range(height * 3 // 4, height)) or QColor(18, 19, 26)
-    return top, bottom
+
+def _ambient_gradient_colors(pixmap):
+    """Dominant top and bottom edge tones for the vertical backdrop gradient."""
+    return _ambient_box_colors(
+        pixmap,
+        [((0, 0, 1, 0.25), QColor(30, 32, 42)), ((0, 0.75, 1, 1), QColor(18, 19, 26))],
+    )
+
+
+def _ambient_diagonal_colors(pixmap):
+    """Top-left and bottom-right corner tones for the diagonal backdrop gradient."""
+    return _ambient_box_colors(
+        pixmap,
+        [((0, 0, 0.5, 0.5), QColor(30, 32, 42)), ((0.5, 0.5, 1, 1), QColor(18, 19, 26))],
+    )
 
 
 def _version_tuple(text):
@@ -1484,10 +1502,15 @@ class MainWindow(QMainWindow):
         self.cinematic_style_combo = QComboBox()
         self.cinematic_style_combo.addItem("Frosted blur", "frosted")
         self.cinematic_style_combo.addItem("Color gradient", "gradient")
+        self.cinematic_style_combo.addItem("Diagonal gradient", "diagonal")
+        self.cinematic_style_combo.addItem("Dreamy blur", "dreamy")
+        self.cinematic_style_combo.addItem("Spotlight vignette", "vignette")
+        self.cinematic_style_combo.addItem("Monochrome tint", "duotone")
         self.cinematic_style_combo.setToolTip(
-            "How the cinematic backdrop is drawn from the cover art: a blurred, "
-            "milky frost filling the window, or a smooth color gradient sampled "
-            "from the cover's top and bottom tones. Either fills the whole window."
+            "How the cinematic backdrop is drawn from the cover art: frosted or "
+            "very heavy (dreamy) blur, vertical or diagonal color gradients, a "
+            "blur with a dark spotlight vignette, or a monochrome version tinted "
+            "with the accent color. Any of them fills the whole window."
         )
         self.cinematic_style_combo.currentIndexChanged.connect(
             self._on_cinematic_style_changed
@@ -3103,40 +3126,101 @@ class MainWindow(QMainWindow):
         ambient.show()
 
     def _render_ambient(self, source, tw, th, style="frosted"):
-        """Draw the cinematic backdrop — frosted-glass blur or color gradient.
+        """Draw the cinematic backdrop in the selected style.
 
-        The frosted style collapses and re-expands the source (a cheap
-        gaussian-style blur), draws it full-bleed edge to edge, then veils it
-        with a milky frost so it reads as glass rather than a pixelated blow-up.
-        The gradient style samples the cover's top and bottom edge tones and
-        fades smoothly between them down the window. The layer is dimmed further
-        by the ambient opacity effect, keeping title-bar text legible.
+        All styles draw onto a ``tw x th`` device-pixel canvas that covers the
+        whole window (title bar included):
+
+        * ``frosted``   — moderate blur, full-bleed, milky-white veil.
+        * ``dreamy``    — very aggressive blur into a soft pastel wash.
+        * ``gradient``  — vertical fade between the cover's top/bottom tones.
+        * ``diagonal``  — diagonal fade from top-left to bottom-right tones.
+        * ``vignette``  — blurred cover with a dark radial vignette at the edges.
+        * ``duotone``   — blurred monochrome cover tinted with the accent color.
+
+        The blurred variants collapse then re-expand the source (a cheap
+        gaussian-style blur) so a small portrait never looks jagged. The layer
+        is dimmed further by the ambient opacity effect, keeping text legible.
         """
         if style == "gradient":
-            top, bottom = _ambient_gradient_colors(source)
-            out = QPixmap(tw, th)
-            out.fill(Qt.black)
-            p = QPainter(out)
-            grad = QLinearGradient(0, 0, 0, th)
-            grad.setColorAt(0.0, top)
-            grad.setColorAt(1.0, bottom)
-            p.fillRect(out.rect(), QBrush(grad))
-            p.end()
-            return out
+            return self._flat_gradient(tw, th, _ambient_gradient_colors(source))
+        if style == "diagonal":
+            return self._flat_gradient(tw, th, _ambient_diagonal_colors(source), diagonal=True)
+        if style == "duotone":
+            return self._monochrome_tint(source, tw, th)
+        if style == "dreamy":
+            return self._blur_veil(source, tw, th, scale=5, veil=QColor(255, 255, 255, 110))
+        if style == "vignette":
+            return self._blur_veil(source, tw, th, scale=8, veil=None, vignette=True)
 
+        return self._blur_veil(source, tw, th, scale=10, veil=QColor(255, 255, 255, 60))
+
+    def _flat_gradient(self, tw, th, colors, diagonal=False):
+        """Canvas filled with a linear gradient across the two sampled colors."""
+        top, bottom = colors
+        out = QPixmap(tw, th)
+        out.fill(Qt.black)
+        p = QPainter(out)
+        grad = QLinearGradient(0, 0, tw if diagonal else 0, th if diagonal else th)
+        grad.setColorAt(0.0, top)
+        grad.setColorAt(1.0, bottom)
+        p.fillRect(out.rect(), QBrush(grad))
+        p.end()
+        return out
+
+    def _blur_veil(self, source, tw, th, scale, veil, vignette=False):
+        """Blur the cover full-bleed (``scale`` = blur strength), then overlay a
+        color veil and/or a dark radial vignette."""
         out = QPixmap(tw, th)
         out.fill(Qt.black)
         p = QPainter(out)
         p.setRenderHint(QPainter.SmoothPixmapTransform)
         small = source.scaled(
-            max(1, tw // 10), max(1, th // 10),
+            max(1, tw // scale), max(1, th // scale),
             Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation,
         )
         src = small.scaled(tw, th, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
         x = (src.width() - tw) // 2
         y = (src.height() - th) // 2
         p.drawPixmap(0, 0, src, x, y, tw, th)
-        p.fillRect(out.rect(), QColor(255, 255, 255, 60))  # frosted-glass veil
+        if veil is not None:
+            p.fillRect(out.rect(), veil)
+        if vignette:
+            grad = QRadialGradient(tw / 2, th / 2, max(tw, th) * 0.75)
+            grad.setColorAt(0.0, QColor(0, 0, 0, 0))
+            grad.setColorAt(0.75, QColor(0, 0, 0, 40))
+            grad.setColorAt(1.0, QColor(0, 0, 0, 170))
+            p.fillRect(out.rect(), QBrush(grad))
+        p.end()
+        return out
+
+    def _monochrome_tint(self, source, tw, th):
+        """Blur the cover, drain it to grayscale, then tint it with the accent."""
+        out = QPixmap(tw, th)
+        out.fill(Qt.black)
+        p = QPainter(out)
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
+        try:
+            img = source.toImage().convertToFormat(QImage.Format_ARGB32).scaled(
+                max(1, tw // 6), max(1, th // 6),
+                Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation,
+            ).convertToFormat(QImage.Format_Grayscale8)
+            big = img.scaled(
+                tw, th, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation
+            ).convertToFormat(QImage.Format_ARGB32)
+            src = QPixmap.fromImage(big)
+            x = (src.width() - tw) // 2
+            y = (src.height() - th) // 2
+            p.drawPixmap(0, 0, src, x, y, tw, th)
+            accent = QColor(self.cfg.data.accent)
+            if accent.isValid():
+                p.setCompositionMode(QPainter.CompositionMode_SoftLight)
+                p.fillRect(out.rect(), accent)
+                p.setCompositionMode(QPainter.CompositionMode_SourceOver)
+            p.fillRect(out.rect(), QColor(0, 0, 0, 60))  # moody depth
+        except Exception:  # noqa: BLE001 - fall back to the frosted look
+            p.end()
+            return self._blur_veil(source, tw, th, scale=10, veil=QColor(255, 255, 255, 60))
         p.end()
         return out
 
