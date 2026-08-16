@@ -800,6 +800,10 @@ class MainWindow(QMainWindow):
         self._stats_icon_fetching = set()
         self._section_icon_pending = {}  # cover-url -> QListWidgetItem (AniList sections)
         self._section_icon_fetching = set()
+        self._library_icon_pending = {}  # cover-url -> QListWidgetItem (Library tab)
+        self._library_icon_fetching = set()
+        self._notified_airing = set()  # (anilist_id, episode) pairs already announced
+        self._tunnel_proc = None      # cloudflared subprocess for the share tunnel
         self._continue_icon_pending = {}  # cover-url -> QToolButton (continue strip)
         self._continue_icon_fetching = set()
         self._title_drag = None
@@ -1297,6 +1301,9 @@ class MainWindow(QMainWindow):
         recent_layout.addWidget(self.recent_list, 1)
         self.stack.addWidget(recent_page)
 
+        self._build_library_page(m, compact)
+        self.stack.addWidget(self._library_page)
+
         self._build_stats_page(m, compact)
         self.stack.addWidget(self._stats_page)
 
@@ -1325,6 +1332,8 @@ class MainWindow(QMainWindow):
 
         self.tabbar.addTab("Main")
         self.tabbar.addTab("Recently Watched")
+        self.tabbar.addTab("Library")
+        self._library_tab_index = self.tabbar.count() - 1
         self.tabbar.addTab("Stats")
         self._stats_tab_index = self.tabbar.count() - 1
         self.tabbar.addTab("Settings")
@@ -1399,8 +1408,21 @@ class MainWindow(QMainWindow):
         self.copy_url_btn.setObjectName("ghost")
         self.copy_url_btn.setToolTip("Copy the current page URL to the clipboard.")
         self.copy_url_btn.setEnabled(False)
+        self.share_now_btn = QPushButton("Share now playing")
+        self.share_now_btn.setObjectName("ghost")
+        self.share_now_btn.setToolTip(
+            "Open the public Now Playing page for this machine (localhost).\n"
+            "Use 'Share via tunnel' below to expose it on the internet."
+        )
+        self.share_tunnel_btn = QPushButton("Share via tunnel")
+        self.share_tunnel_btn.setObjectName("ghost")
+        self.share_tunnel_btn.setToolTip(
+            "Expose the Now Playing page through a free cloudflared tunnel and "
+            "copy the public link. Requires the cloudflared binary."
+        )
         for _btn in (self.open_site_btn, self.open_pwa_btn, self.open_anilist_btn,
-                     self.fix_match_btn, self.next_ep_btn, self.copy_url_btn):
+                     self.fix_match_btn, self.next_ep_btn, self.copy_url_btn,
+                     self.share_now_btn, self.share_tunnel_btn):
             _btn.setMinimumWidth(132)
             button_col.addWidget(_btn)
         button_col.addStretch(1)
@@ -1739,6 +1761,77 @@ class MainWindow(QMainWindow):
             self._refresh_stats()
 
     # --------------------------------------------------------------- stats
+    def _build_library_page(self, margin, compact):
+        """Assemble the "Library" tab: the active AniList account's list grouped
+        by status, refreshed live from AniList (public list, no OAuth needed)."""
+        page = QScrollArea()
+        page.setObjectName("scroller")
+        page.setWidgetResizable(True)
+        page.setFrameShape(QFrame.NoFrame)
+        page.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        page.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        host = QWidget()
+        layout = QVBoxLayout(host)
+        layout.setContentsMargins(margin, (6 if not compact else 4), margin, margin)
+        layout.setSpacing(self._gap)
+        page.setWidget(host)
+        self._library_page = page
+
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        header.addWidget(self._field_label("Library"))
+        header.addStretch(1)
+        self.library_account_label = QLabel("")
+        self.library_account_label.setObjectName("subLabel")
+        header.addWidget(self.library_account_label)
+        self.library_refresh_btn = QPushButton("Refresh")
+        self.library_refresh_btn.setObjectName("ghost")
+        self.library_refresh_btn.setToolTip(
+            "Re-fetch the active AniList account's list. "
+            "Requires a public list (username in Controls)."
+        )
+        self.library_refresh_btn.clicked.connect(self._on_refresh_library)
+        header.addWidget(self.library_refresh_btn)
+        layout.addLayout(header)
+
+        self._library_tabs = QTabBar()
+        self._library_tabs.setDrawBase(False)
+        self._library_tabs.addTab("Calendar")
+        for label in ("Watching", "Planning", "Completed", "Paused", "Dropped"):
+            self._library_tabs.addTab(label)
+        self._library_tabs.currentChanged.connect(self._on_library_section_changed)
+        layout.addWidget(self._library_tabs)
+        self._library_stack = QStackedWidget()
+
+        calendar_page = QWidget()
+        cal_layout = QVBoxLayout(calendar_page)
+        cal_layout.setContentsMargins(0, 8, 0, 0)
+        cal_layout.setSpacing(8)
+        self._calendar_season_label = QLabel("")
+        self._calendar_season_label.setObjectName("subLabel")
+        cal_layout.addWidget(self._calendar_season_label)
+        self._calendar_list = QListWidget()
+        self._calendar_list.setIconSize(QSize(38, 53))
+        self._calendar_list.itemDoubleClicked.connect(self._open_anilist_entry)
+        self._calendar_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        cal_layout.addWidget(self._calendar_list, 1)
+        self._library_stack.addWidget(calendar_page)
+
+        self._library_section_lists = {}
+        for key in ("Watching", "Planning", "Completed", "Paused", "Dropped"):
+            section_page = QWidget()
+            sl = QVBoxLayout(section_page)
+            sl.setContentsMargins(0, 8, 0, 0)
+            sl.setSpacing(8)
+            listw = QListWidget()
+            listw.setIconSize(QSize(38, 53))
+            listw.itemDoubleClicked.connect(self._open_anilist_entry)
+            listw.setContextMenuPolicy(Qt.CustomContextMenu)
+            self._library_section_lists[key] = listw
+            sl.addWidget(listw, 1)
+            self._library_stack.addWidget(section_page)
+        layout.addWidget(self._library_stack, 1)
+
     def _build_stats_page(self, margin, compact):
         """Assemble the "Stats" tab: summary cards, a daily chart and per-title
         rows with a one-click Resume button that reopens the exact episode."""
@@ -2280,6 +2373,158 @@ class MainWindow(QMainWindow):
     def _on_stats_section_changed(self, index):
         self._stats_stack.setCurrentIndex(index)
 
+    def _on_library_section_changed(self, index):
+        self._library_stack.setCurrentIndex(index)
+        if index == 0 and self._library_tabs.tabText(index) == "Calendar":
+            self._on_refresh_library()
+
+    def _on_refresh_library(self):
+        """Kick off a live fetch of the active account's AniList list + calendar."""
+        self.library_refresh_btn.setEnabled(False)
+        self.library_refresh_btn.setText("Loading…")
+        self.controller.refresh_library()
+        self.controller.refresh_calendar()
+
+    def _on_library_loaded(self, payload):
+        """Fill the Library sections from a background fetch."""
+        self.library_refresh_btn.setEnabled(True)
+        self.library_refresh_btn.setText("Refresh")
+        message = payload.get("message") or ""
+        username = payload.get("username") or ""
+        sections = payload.get("sections") or {}
+        if username:
+            self.library_account_label.setText(f"{username} · AniList")
+        else:
+            self.library_account_label.setText("")
+        for key, listw in self._library_section_lists.items():
+            listw.clear()
+            entries = sections.get(key) or []
+            if not entries:
+                if message:
+                    text = message
+                elif key == "Watching":
+                    text = ("No AniList account set — add one in Settings and "
+                            "switch to it, or press Refresh.")
+                else:
+                    text = "Nothing in this list yet."
+                item = QListWidgetItem(text)
+                item.setFlags(Qt.NoItemFlags)
+                listw.addItem(item)
+                continue
+            for e in entries:
+                title = e.get("title") or "?"
+                progress = int(e.get("progress") or 0)
+                episodes = e.get("episodes")
+                score = e.get("mean_score")
+                if episodes:
+                    prog = f"Ep {progress}/{episodes}"
+                else:
+                    prog = f"Ep {progress}" if progress else "—"
+                extra = f"  ★{score}" if score else ""
+                item = QListWidgetItem(f"{title} · {prog}{extra}")
+                item.setData(Qt.UserRole, e.get("url") or "")
+                if not self.cfg.data.privacy_mode and e.get("url"):
+                    item.setToolTip(e["url"])
+                item.setData(Qt.UserRole + 1, e)
+                cover = e.get("cover") or ""
+                if cover:
+                    cached = self._cover_cache_path(cover)
+                    if cached.exists():
+                        item.setIcon(QIcon(str(cached)))
+                    else:
+                        self._library_icon_pending[cover] = item
+                        if cover not in self._library_icon_fetching:
+                            self._library_icon_fetching.add(cover)
+                            self._nam.get(QNetworkRequest(QUrl(cover)))
+                listw.addItem(item)
+        self._maybe_notify_airing(sections)
+
+    def _maybe_notify_airing(self, sections):
+        """Tray-notify once per episode when a followed show airs within 24h."""
+        import time
+
+        watched = sections.get("Watching") or []
+        now = time.time()
+        horizon = now + 24 * 3600
+        due = []
+        for e in watched:
+            at = e.get("next_airing_at")
+            ep = e.get("next_airing_episode")
+            key = (e.get("anilist_id"), ep)
+            if at and now <= at <= horizon and key not in self._notified_airing:
+                self._notified_airing.add(key)
+                due.append((e.get("title") or "?", at))
+        if not due:
+            return
+        due.sort(key=lambda pair: pair[1])
+        names = ", ".join(t for t, _ in due[:3])
+        extra = f" (+{len(due) - 3} more)" if len(due) > 3 else ""
+        self._notify("Airing soon", f"{names}{extra} airs within 24h.")
+
+    def _on_calendar_loaded(self, payload):
+        """Fill the Calendar sub-tab from a background seasonal fetch."""
+        import datetime
+
+        listw = self._calendar_list
+        listw.clear()
+        self._calendar_season_label.setText(payload.get("season") or "")
+        entries = payload.get("entries") or []
+        message = payload.get("message") or ""
+        if not entries:
+            item = QListWidgetItem(message or "Nothing listed for this season.")
+            item.setFlags(Qt.NoItemFlags)
+            listw.addItem(item)
+            return
+
+        today = datetime.datetime.now().date()
+        buckets = {}  # label -> [entries]
+        for e in entries:
+            at = e.get("next_airing_at")
+            if at:
+                day = datetime.datetime.fromtimestamp(at).date()
+                delta = (day - today).days
+                if delta <= 0:
+                    label = "Today"
+                elif delta == 1:
+                    label = "Tomorrow"
+                else:
+                    label = day.strftime("%A, %b %d")
+                sort_key = max(delta, 0)
+            else:
+                label = "Finished / unannounced"
+                sort_key = 10 ** 9
+            buckets.setdefault(label, (sort_key, []))[1].append(e)
+
+        for label in sorted(buckets, key=lambda lbl: buckets[lbl][0]):
+            header = QListWidgetItem(label)
+            header.setFlags(Qt.NoItemFlags)
+            listw.addItem(header)
+            for e in buckets[label][1]:
+                title = e.get("title") or "?"
+                ep = e.get("next_airing_episode")
+                prog = f"Ep {ep}" if ep else "premiering soon"
+                badge = ""
+                if e.get("in_library"):
+                    st = (e.get("library_status") or "").upper()
+                    st = "Watching" if st in ("CURRENT", "REPEATING") else st.title()
+                    badge = f"  ★{st}"
+                item = QListWidgetItem(f"{title} · {prog}{badge}")
+                item.setData(Qt.UserRole, e.get("url") or "")
+                if not self.cfg.data.privacy_mode and e.get("url"):
+                    item.setToolTip(e["url"])
+                item.setData(Qt.UserRole + 1, e)
+                cover = e.get("cover") or ""
+                if cover:
+                    cached = self._cover_cache_path(cover)
+                    if cached.exists():
+                        item.setIcon(QIcon(str(cached)))
+                    else:
+                        self._library_icon_pending[cover] = item
+                        if cover not in self._library_icon_fetching:
+                            self._library_icon_fetching.add(cover)
+                            self._nam.get(QNetworkRequest(QUrl(cover)))
+                listw.addItem(item)
+
     def _refresh_sections(self):
         """Fill the Watching/Planning/Completed lists from the imported lists."""
         sections = self.controller.watchlog.anilist_sections()
@@ -2406,6 +2651,8 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentIndex(index)
         if index == self._stats_tab_index:
             self._refresh_stats()
+        if index == self._library_tab_index:
+            self._on_refresh_library()
         self._animate_tab_in(self.stack.currentWidget())
 
     def _animate_tab_in(self, widget):
@@ -2456,6 +2703,9 @@ class MainWindow(QMainWindow):
         self.bridge.recent.connect(self._on_recent_also_stats)
         self.bridge.stats_imported.connect(self._on_stats_imported)
         self.bridge.account_avatar.connect(self._on_account_avatar)
+        self.bridge.library_loaded.connect(self._on_library_loaded)
+        self.bridge.calendar_loaded.connect(self._on_calendar_loaded)
+        self.bridge.share_tunnel.connect(self._on_tunnel_public_url)
         self.bridge.log.connect(self._on_log)
 
         self.rpc_check.toggled.connect(lambda on: self._on_rpc_toggled(on))
@@ -2491,6 +2741,8 @@ class MainWindow(QMainWindow):
         self.fix_match_btn.clicked.connect(self._on_wrong_match)
         self.next_ep_btn.clicked.connect(self._next_episode)
         self.copy_url_btn.clicked.connect(self._copy_url)
+        self.share_now_btn.clicked.connect(self._on_share_now)
+        self.share_tunnel_btn.clicked.connect(self._on_share_tunnel)
         self.watch_any_btn.clicked.connect(self._on_watch_any)
         self.clear_manual_btn.clicked.connect(self._on_clear_manual)
         self.stats_btn.clicked.connect(self._on_stats)
@@ -2798,6 +3050,7 @@ class MainWindow(QMainWindow):
             self.controller.switch_anilist_account(name)
             self._refresh_stats()
         self._load_account_avatar()
+        self._on_refresh_library()
 
     def _on_add_anilist_account(self):
         username, ok = QInputDialog.getText(
@@ -3519,6 +3772,12 @@ class MainWindow(QMainWindow):
             item = self._section_icon_pending.get(orig)
             pending = self._section_icon_pending
             pending.pop(orig, None)
+        elif orig in self._library_icon_pending:
+            # Library-tab cover.
+            self._library_icon_fetching.discard(orig)
+            item = self._library_icon_pending.get(orig)
+            pending = self._library_icon_pending
+            pending.pop(orig, None)
         elif orig in self._continue_icon_pending:
             # Continue-watching tile: a QToolButton, not a list item.
             self._continue_icon_fetching.discard(orig)
@@ -3703,6 +3962,81 @@ class MainWindow(QMainWindow):
         if url:
             QApplication.clipboard().setText(url)
             self._notify("AniPresence", "Page URL copied to clipboard.")
+
+    def _on_share_now(self):
+        """Open the local Now Playing page in the browser."""
+        if not self.controller.extension.running:
+            self._notify("Share", "Enable the browser-extension bridge in Settings first.")
+            return
+        url = f"http://127.0.0.1:{self.controller.extension.bound_port}/now"
+        webbrowser.open(url)
+        self._log_line(f"Opening Now Playing page: {url}")
+
+    def _on_share_tunnel(self):
+        """Start/stop a cloudflared quick tunnel exposing the Now Playing page."""
+        if self._tunnel_proc is not None and self._tunnel_proc.poll() is None:
+            self._stop_tunnel()
+            return
+        if not self.controller.extension.running:
+            self._notify("Share", "Enable the browser-extension bridge in Settings first.")
+            return
+        import re
+        import shutil
+        import subprocess
+        import threading
+
+        exe = shutil.which("cloudflared")
+        if not exe:
+            self._notify(
+                "Share",
+                "cloudflared wasn't found. Install it (`winget install cloudflared`), "
+                "then try again.",
+            )
+            return
+        port = self.controller.extension.bound_port
+        proc = subprocess.Popen(
+            [exe, "tunnel", "--url", f"http://127.0.0.1:{port}", "--no-autoupdate"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+        self._tunnel_proc = proc
+        self.share_tunnel_btn.setText("Stop tunnel")
+        self.share_tunnel_btn.setEnabled(False)
+
+        def _watch():
+            while proc.poll() is None:
+                raw = proc.stderr.readline()
+                if not raw:
+                    break
+                line = raw.decode("utf-8", "replace")
+                m = re.search(r"https://[a-z0-9-]+\.trycloudflare\.com", line)
+                if m:
+                    self.bridge.share_tunnel.emit(m.group(0))
+                    return
+            self.bridge.share_tunnel.emit("")  # died before handing out a URL
+
+        threading.Thread(target=_watch, daemon=True).start()
+
+    def _stop_tunnel(self):
+        proc = self._tunnel_proc
+        self._tunnel_proc = None
+        self.share_tunnel_btn.setText("Share via tunnel")
+        self.share_tunnel_btn.setEnabled(True)
+        if proc is not None:
+            try:
+                proc.terminate()
+            except Exception:  # noqa: BLE001 - process already gone
+                pass
+
+    def _on_tunnel_public_url(self, public):
+        if not public:
+            self._stop_tunnel()
+            self._notify("Share", "The tunnel failed to start. Is cloudflared installed?")
+            return
+        QApplication.clipboard().setText(public)
+        self.share_tunnel_btn.setEnabled(True)
+        self._log_line(f"Tunnel live: {public} (copied to clipboard)")
+        self._notify("Share", f"Public link copied:\n{public}")
 
     def _on_watch_any(self):
         dialog = QDialog(self)
@@ -3922,5 +4256,6 @@ class MainWindow(QMainWindow):
             return
         self._save_window_state()
         self._unregister_hotkey()
+        self._stop_tunnel()
         self.controller.request_stop()
         super().closeEvent(event)

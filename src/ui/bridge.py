@@ -17,6 +17,9 @@ class UiBridge(QObject):
     log = Signal(str)                     # one log line
     stats_imported = Signal(int, str)     # (title count, message) from AniList import
     account_avatar = Signal(str, str)     # (username, avatar URL) — "" URL when none
+    library_loaded = Signal(dict)         # {"username", "sections", "message"}
+    calendar_loaded = Signal(dict)         # {"username", "season", "entries", "message"}
+    share_tunnel = Signal(str)             # public trycloudflare URL ("" = failed)
 
 
 class QtLogHandler(logging.Handler):

@@ -25,6 +25,7 @@ from urllib.parse import urlsplit
 from pypresence import ActivityType, StatusDisplayType
 
 from ..config import APP_DIR
+from .. import __version__
 from ..anime.anilist import AniListClient, AniListError, Media
 from ..anime.cache import AniCache
 from ..anime.matcher import best_match
@@ -133,6 +134,7 @@ class Controller:
         self.extension = ExtensionBridge(
             port=cfg.data.extension_port, token=cfg.data.extension_token
         )
+        self.extension.now_provider = self.now_playing
 
         self._anilist_miss = {}                  # search key -> last-failed timestamp
         # internal state
@@ -911,6 +913,149 @@ class Controller:
 
         threading.Thread(target=_run, daemon=True).start()
 
+    def refresh_library(self, username=None):
+        """Fetch the active account's full AniList list for the Library tab.
+
+        Runs in a background thread (network I/O). Emits ``library_loaded``
+        with ``{"username", "sections", "message"}``; sections group the list
+        membership by status so the UI can render Watching/Planning/Completed/
+        Paused/Dropped.
+        """
+        import threading
+
+        username = username or self._active_account or (self.cfg.data.anilist_username or "").strip()
+        if not username:
+            self.bridge.library_loaded.emit(
+                {"username": "", "sections": {}, "message": "No AniList username set."}
+            )
+            return
+
+        def _run():
+            try:
+                entries = self.anilist.fetch_user_list(username)
+            except Exception as exc:  # noqa: BLE001 - report and stop
+                self.bridge.log.emit(f"Library fetch failed: {exc}")
+                self.bridge.library_loaded.emit(
+                    {"username": username, "sections": {}, "message": f"Fetch failed: {exc}"}
+                )
+                return
+            sections = self._build_library_sections(entries)
+            self.bridge.library_loaded.emit({"username": username, "sections": sections, "message": ""})
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    @staticmethod
+    def _current_season(when=None):
+        """Return (season_name, year) for a date, AniList season-style."""
+        from datetime import date
+
+        when = when or date.today()
+        month = when.month
+        if month in (1, 2, 3):
+            season = "WINTER"
+        elif month in (4, 5, 6):
+            season = "SPRING"
+        elif month in (7, 8, 9):
+            season = "SUMMER"
+        else:
+            season = "FALL"
+        return season, when.year
+
+    def refresh_calendar(self, username=None):
+        """Fetch the current season's catalogue + the user's library markers.
+
+        Runs in a background thread. Emits ``calendar_loaded`` with
+        ``{"username", "season", "entries", "message"}``; each entry carries
+        ``in_library`` / ``library_status`` so the UI can mark titles the user
+        already follows.
+        """
+        import threading
+
+        username = username or self._active_account or (self.cfg.data.anilist_username or "").strip()
+        season, year = self._current_season()
+
+        def _run():
+            try:
+                seasonal = self.anilist.fetch_seasonal(season, year)
+                library = self.anilist.fetch_user_list(username) if username else []
+            except Exception as exc:  # noqa: BLE001 - report and stop
+                self.bridge.log.emit(f"Calendar fetch failed: {exc}")
+                self.bridge.calendar_loaded.emit(
+                    {"username": username, "season": f"{season} {year}", "entries": [], "message": f"Fetch failed: {exc}"}
+                )
+                return
+            entries = self._build_calendar_entries(seasonal, library)
+            self.bridge.calendar_loaded.emit(
+                {"username": username, "season": f"{season} {year}", "entries": entries, "message": ""}
+            )
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    @staticmethod
+    def _build_calendar_entries(seasonal, library):
+        """Build flat calendar entries, marking which the user already follows."""
+        status_map = {}
+        for item in library or []:
+            media = item.get("media")
+            if media is not None:
+                status_map[media.id] = (item.get("status") or "").upper()
+        entries = []
+        for media in seasonal or []:
+            status = status_map.get(media.id)
+            entries.append(
+                {
+                    "title": media.display_title(),
+                    "url": media.site_url,
+                    "cover": media.cover_large or media.cover_extra_large,
+                    "anilist_id": media.id,
+                    "episodes": media.episodes,
+                    "mean_score": media.mean_score,
+                    "season": media.season,
+                    "season_year": media.season_year,
+                    "next_airing_at": media.next_airing_at,
+                    "next_airing_episode": media.next_airing_episode,
+                    "in_library": status is not None,
+                    "library_status": status or "",
+                }
+            )
+        # Soonest-to-air first; unannounced (None) entries trail behind.
+        entries.sort(key=lambda e: (e["next_airing_at"] is None, e["next_airing_at"] or 0))
+        return entries
+
+    @staticmethod
+    def _build_library_sections(entries):
+        """Group fetched list entries into the five Library sections."""
+        sections = {"Watching": [], "Planning": [], "Completed": [], "Paused": [], "Dropped": []}
+        for item in entries or []:
+            media = item.get("media")
+            if media is None:
+                continue
+            status = (item.get("status") or "").upper()
+            progress = max(int(item.get("progress") or 0), 0)
+            entry = {
+                "title": media.display_title(),
+                "url": media.site_url,
+                "cover": media.cover_large or media.cover_extra_large,
+                "anilist_id": media.id,
+                "status": status,
+                "progress": progress,
+                "episodes": media.episodes,
+                "mean_score": media.mean_score,
+                "next_airing_at": media.next_airing_at,
+                "next_airing_episode": media.next_airing_episode,
+            }
+            if status in ("CURRENT", "REPEATING", "WATCHING"):
+                sections["Watching"].append(entry)
+            elif status == "PLANNING":
+                sections["Planning"].append(entry)
+            elif status == "COMPLETED":
+                sections["Completed"].append(entry)
+            elif status == "PAUSED":
+                sections["Paused"].append(entry)
+            elif status == "DROPPED":
+                sections["Dropped"].append(entry)
+        return sections
+
     @staticmethod
     def _categorize_list_entry(item, media, records, sections):
         """Split one fetched list entry into (records, sections) by its status."""
@@ -1082,6 +1227,62 @@ class Controller:
             return
         self._update_rpc(details, state, cover, title, start, end, buttons, payload)
         self._last_sent = {"sig": self._signature(payload), "end": end, "at": time.time()}
+
+    def now_playing(self):
+        """Snapshot of the current presence for the public share page.
+
+        Read by the localhost bridge's ``/now.json`` handler from a different
+        thread, so it only reads immutable state and never mutates anything.
+        Privacy mode blanks the page entirely (idle); hiding adult content
+        keeps playback visible but withholds the title/cover.
+        """
+        base = {
+            "app": "AniPresence",
+            "version": __version__,
+            "active": False,
+            "private": bool(self.cfg.data.privacy_mode),
+            "updated": int(time.time()),
+        }
+        if self.cfg.data.privacy_mode or self._manual:
+            return base
+        session = self._current
+        if session is None:
+            return base
+        detection, media = session.detection, session.media
+        video = detection.video or VideoState()
+        title = (
+            (media.display_title() if media else None)
+            or detection.cleaned_title
+            or detection.raw_title
+        )
+        cover = (media.cover_extra_large or media.cover_large) if media else None
+        hidden = (
+            bool(self.cfg.data.hide_adult_content)
+            and media is not None
+            and media.is_adult_content()
+        )
+        base.update(
+            {
+                "active": True,
+                "title": title or "",
+                "url": detection.url or "",
+                "site": detection.website or "",
+                "episode": detection.episode or None,
+                "episodes": media.episodes if media else None,
+                "cover": cover or "",
+                "status": "paused" if video.paused else "playing",
+                "position": max(0.0, video.current_time),
+                "duration": video.duration or 0,
+                "media_url": media.site_url if media else "",
+                "hidden": hidden,
+            }
+        )
+        if hidden:
+            base["title"] = ""
+            base["cover"] = ""
+            base["url"] = ""
+            base["media_url"] = ""
+        return base
 
     def _update_rpc(self, details, state, cover, title, start, end, buttons, payload):
         """Push a presence change through every configured broadcast channel.

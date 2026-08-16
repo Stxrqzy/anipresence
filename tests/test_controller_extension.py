@@ -194,6 +194,211 @@ def test_sync_presence_timestamps_anchor_to_position(tmp_path, app, monkeypatch)
     assert abs((int(time.time()) - start1) - 720) < 3  # elapsed tracks the position
 
 
+def test_library_sections_group_by_status(tmp_path, app):
+    from src.anime.anilist import Media
+
+    ctrl = make_controller(tmp_path)
+    media = Media(id=1, title_romaji="Show A", episodes=12, cover_large="https://c/a.jpg")
+    entries = [
+        {"media": media, "status": "CURRENT", "progress": 5},
+        {"media": media, "status": "PLANNING", "progress": 0},
+        {"media": media, "status": "COMPLETED", "progress": 12},
+        {"media": media, "status": "PAUSED", "progress": 3},
+        {"media": media, "status": "DROPPED", "progress": 1},
+    ]
+    sections = ctrl._build_library_sections(entries)
+    assert sections["Watching"][0]["progress"] == 5
+    assert sections["Planning"][0]["progress"] == 0
+    assert sections["Completed"][0]["progress"] == 12
+    assert sections["Paused"][0]["progress"] == 3
+    assert sections["Dropped"][0]["progress"] == 1
+    assert sections["Watching"][0]["anilist_id"] == 1
+    assert sections["Watching"][0]["title"] == "Show A"
+
+
+def test_refresh_library_emits_sections(tmp_path, app, monkeypatch):
+    from src.anime.anilist import Media
+
+    ctrl = make_controller(tmp_path)
+    ctrl._active_account = "someone"
+
+    class FakeAniList:
+        def fetch_user_list(self, username):
+            media = Media(id=7, title_romaji="Show B", episodes=24)
+            return [{"media": media, "status": "CURRENT", "progress": 9}]
+
+    ctrl.anilist = FakeAniList()
+
+    class Capture:
+        def __init__(self):
+            self.calls = []
+
+        def emit(self, *args):
+            self.calls.append(args)
+
+    cap = Capture()
+    monkeypatch.setattr(ctrl.bridge, "library_loaded", cap)
+    ctrl.refresh_library()
+
+    deadline = time.time() + 5
+    while not cap.calls and time.time() < deadline:
+        time.sleep(0.05)
+    assert cap.calls, "library_loaded never emitted"
+    payload = cap.calls[0][0]
+    assert payload["username"] == "someone"
+    watching = payload["sections"]["Watching"]
+    assert watching and watching[0]["title"] == "Show B"
+    assert watching[0]["progress"] == 9
+
+
+def test_current_season_mapping():
+    from datetime import date
+
+    from src.core.controller import Controller
+
+    assert Controller._current_season(date(2026, 1, 15)) == ("WINTER", 2026)
+    assert Controller._current_season(date(2026, 5, 1)) == ("SPRING", 2026)
+    assert Controller._current_season(date(2026, 8, 16)) == ("SUMMER", 2026)
+    assert Controller._current_season(date(2026, 12, 1)) == ("FALL", 2026)
+
+
+def test_build_calendar_entries_marks_library(tmp_path, app):
+    from src.anime.anilist import Media
+
+    ctrl = make_controller(tmp_path)
+    seasonal = [
+        Media(id=1, title_romaji="Airs Soon", next_airing_at=100, next_airing_episode=2),
+        Media(id=2, title_romaji="No Date", next_airing_at=None),
+    ]
+    library = [{"media": Media(id=1, title_romaji="Airs Soon"), "status": "CURRENT", "progress": 1}]
+    entries = ctrl._build_calendar_entries(seasonal, library)
+    assert entries[0]["anilist_id"] == 1  # soonest-to-air first
+    assert entries[0]["in_library"] is True
+    assert entries[0]["library_status"] == "CURRENT"
+    assert entries[1]["anilist_id"] == 2
+    assert entries[1]["in_library"] is False
+
+
+def test_refresh_calendar_emits_entries(tmp_path, app, monkeypatch):
+    from src.anime.anilist import Media
+
+    ctrl = make_controller(tmp_path)
+    ctrl._active_account = "someone"
+
+    class FakeAniList:
+        def fetch_seasonal(self, season, year):
+            return [Media(id=3, title_romaji="Seasonal Hit", next_airing_at=500, next_airing_episode=1)]
+
+        def fetch_user_list(self, username):
+            return []
+
+    ctrl.anilist = FakeAniList()
+
+    class Capture:
+        def __init__(self):
+            self.calls = []
+
+        def emit(self, *args):
+            self.calls.append(args)
+
+    cap = Capture()
+    monkeypatch.setattr(ctrl.bridge, "calendar_loaded", cap)
+    ctrl.refresh_calendar()
+
+    deadline = time.time() + 5
+    while not cap.calls and time.time() < deadline:
+        time.sleep(0.05)
+    assert cap.calls, "calendar_loaded never emitted"
+    payload = cap.calls[0][0]
+    assert "SUMMER" in payload["season"]
+    assert payload["entries"][0]["title"] == "Seasonal Hit"
+
+
+def test_now_playing_snapshot_flow(tmp_path, app, monkeypatch):
+    """A live session yields an active snapshot; privacy/adult rules apply."""
+    from src.anime.anilist import Media
+    from src.browser.detectors import Detection
+
+    ctrl = make_controller(tmp_path)
+    detection = Detection(
+        website="gogoanime",
+        url="https://gogoanime.example/watch/demon-slayer-episode-5",
+        raw_title="Demon Slayer - Watch Episode 5",
+        cleaned_title="Demon Slayer",
+        episode=5,
+        video=VideoState(has_video=True, current_time=45.0, duration=1200.0, paused=False),
+    )
+    media = Media(id=9, title_romaji="Demon Slayer", episodes=26,
+                  cover_extra_large="https://cdn.example/c.jpg", site_url="https://anilist.co/anime/9")
+    ctrl._current = type("S", (), {"detection": detection, "media": media})()
+
+    snap = ctrl.now_playing()
+    assert snap["active"] is True
+    assert snap["title"] == "Demon Slayer"
+    assert snap["status"] == "playing"
+    assert snap["position"] == 45.0
+    assert snap["duration"] == 1200.0
+    assert snap["cover"] == "https://cdn.example/c.jpg"
+    assert snap["episode"] == 5
+    assert snap["version"] == "2.0.0"
+
+    # Privacy mode -> fully idle.
+    ctrl.cfg.set(privacy_mode=True)
+    assert ctrl.now_playing()["active"] is False
+    ctrl.cfg.set(privacy_mode=False)
+
+    # hide_adult_content + adult media -> playback visible, identity withheld.
+    adult = Media(id=10, title_romaji="Ecchi Show", is_adult=True,
+                  cover_extra_large="https://cdn.example/a.jpg")
+    ctrl._current = type("S", (), {"detection": detection, "media": adult})()
+    ctrl.cfg.set(hide_adult_content=True)
+    snap = ctrl.now_playing()
+    assert snap["active"] is True
+    assert snap["title"] == ""
+    assert snap["cover"] == ""
+    assert snap["hidden"] is True
+
+    # No session -> idle.
+    ctrl._current = None
+    assert ctrl.now_playing()["active"] is False
+
+
+def test_now_http_endpoints(tmp_path, app, monkeypatch):
+    """GET /now.json and /now work over the real bridge server (no token)."""
+    ctrl = make_controller(tmp_path)
+    ctrl.extension.start()
+    assert ctrl.extension.running
+
+    def fake_snapshot():
+        return {"active": True, "title": "Demon Slayer", "status": "playing"}
+
+    ctrl.extension.now_provider = fake_snapshot
+
+    try:
+        port = ctrl.extension.bound_port
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        try:
+            conn.request("GET", "/now.json")
+            resp = conn.getresponse()
+            assert resp.status == 200
+            body = json.loads(resp.read().decode("utf-8"))
+            assert body["title"] == "Demon Slayer"
+
+            conn.request("GET", "/now")
+            resp = conn.getresponse()
+            assert resp.status == 200
+            page = resp.read().decode("utf-8")
+            assert "Now Playing" in page
+            assert "/now.json" in page
+
+            conn.request("GET", "/nope")
+            assert conn.getresponse().status == 404
+        finally:
+            conn.close()
+    finally:
+        ctrl.extension.stop()
+
+
 def test_full_http_roundtrip(tmp_path, app, monkeypatch):
     ctrl = make_controller(tmp_path)
     monkeypatch.setattr(ctrl, "_resolve_anime", lambda detection: (None, 0.0))

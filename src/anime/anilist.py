@@ -78,6 +78,7 @@ query ($name: String) {
           season
           seasonYear
           nextAiringEpisode { airingAt episode }
+          meanScore
           isAdult
           genres
           tags { name isAdult }
@@ -95,6 +96,34 @@ query ($name: String) {
     id
     name
     avatar { large }
+  }
+}
+"""
+
+# Current-season catalogue for the Calendar view (public, no auth needed).
+_SEASONAL_QUERY = """
+query ($season: MediaSeason, $seasonYear: Int, $perPage: Int) {
+  Page(page: 1, perPage: $perPage) {
+    media(
+      season: $season
+      seasonYear: $seasonYear
+      type: ANIME
+      sort: POPULARITY_DESC
+      isAdult: false
+    ) {
+      id
+      title { romaji english native }
+      coverImage { large extraLarge }
+      siteUrl
+      episodes
+      season
+      seasonYear
+      nextAiringEpisode { airingAt episode }
+      meanScore
+      genres
+      tags { name isAdult }
+      isAdult
+    }
   }
 }
 """
@@ -269,6 +298,19 @@ class AniListClient:
                     }
                 )
         return results
+
+    def fetch_seasonal(self, season, year, per_page=50):
+        """Fetch the top anime for a given season (e.g. ("SUMMER", 2026)).
+
+        Returns a list of :class:`Media` (adult titles excluded). Episodes that
+        have finished airing carry no ``nextAiringEpisode`` info.
+        """
+        data = self._query(
+            _SEASONAL_QUERY,
+            {"season": season, "seasonYear": int(year), "perPage": int(per_page)},
+        )
+        raw_list = (data.get("Page") or {}).get("media") or []
+        return [Media.from_dict(item) for item in raw_list]
 
     def fetch_user_profile(self, username):
         """Fetch a public user's avatar URL, or "" if the user has no avatar.

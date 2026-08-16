@@ -23,6 +23,101 @@ logger = logging.getLogger("anipresence.extension")
 # setInterval Chrome throttles to ~1/min) keeps its entry without flapping.
 TAB_TTL = 45.0
 
+# Self-contained Now Playing page. No external assets: it polls /now.json
+# every 5 seconds and re-renders. Exposing the bridge through a tunnel (e.g.
+# cloudflared) makes this URL shareable with anyone.
+NOW_PAGE_HTML = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Now Playing · AniPresence</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center;
+         justify-content: center; background: #0e1013; color: #e6e8eb;
+         font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+  .card { background: #16181d; border: 1px solid #262a31; border-radius: 16px;
+          padding: 28px; width: min(520px, 92vw); box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+  .cover { width: 100%; aspect-ratio: 3/4; object-fit: cover; border-radius: 12px;
+           background: #23262c; display: block; }
+  .placeholder { display: flex; align-items: center; justify-content: center;
+           width: 100%; aspect-ratio: 3/4; border-radius: 12px; background: #23262c;
+           color: #8a8f98; font-size: 40px; }
+  h1 { margin: 18px 0 4px; font-size: 22px; line-height: 1.25; }
+  .sub { color: #8a8f98; font-size: 14px; margin: 0 0 14px; }
+  .bar { height: 8px; border-radius: 4px; background: #262a31; overflow: hidden; margin: 12px 0 6px; }
+  .fill { height: 100%; background: #7c5cff; border-radius: 4px; width: 0; transition: width .4s; }
+  .times { display: flex; justify-content: space-between; color: #8a8f98; font-size: 12px; }
+  .status { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px;
+            text-transform: uppercase; letter-spacing: .08em; }
+  .playing { background: #1d4f2b; color: #6ee78a; }
+  .paused  { background: #4a3a12; color: #ecc65a; }
+  .idle    { background: #2a2e35; color: #9aa0a8; }
+  a { color: #a08cff; text-decoration: none; }
+  .foot { margin-top: 18px; color: #5f646d; font-size: 11px; text-align: center; }
+</style>
+</head>
+<body>
+  <div class="card" id="card">
+    <img id="cover" class="cover" alt="cover" hidden>
+    <div class="placeholder" id="ph">?</div>
+    <h1 id="title">No anime detected</h1>
+    <p class="sub" id="sub"></p>
+    <span class="status idle" id="status">idle</span>
+    <div class="bar"><div class="fill" id="fill"></div></div>
+    <div class="times"><span id="cur">00:00</span><span id="total">00:00</span></div>
+    <p class="foot" id="foot">AniPresence · <a id="link" href="#" hidden>Open the page</a></p>
+  </div>
+<script>
+  function fmt(s) { s = Math.max(0, s|0); return String(Math.floor(s/60)).padStart(2,'0') + ':' +
+                    String(s%60).padStart(2,'0'); }
+  async function tick() {
+    try {
+      const r = await fetch('/now.json', { cache: 'no-store' });
+      const d = await r.json();
+      if (!d || !d.active) { render({ active:false }); return; }
+      render(d);
+    } catch (e) { render({ active:false }); }
+  }
+  function render(d) {
+    const title = document.getElementById('title');
+    const sub = document.getElementById('sub');
+    const status = document.getElementById('status');
+    const cover = document.getElementById('cover');
+    const ph = document.getElementById('ph');
+    const fill = document.getElementById('fill');
+    const cur = document.getElementById('cur');
+    const total = document.getElementById('total');
+    const link = document.getElementById('link');
+    if (!d.active) {
+      title.textContent = 'Not watching right now';
+      sub.textContent = 'The owner of this link has AniPresence running.';
+      status.className = 'status idle'; status.textContent = 'idle';
+      cover.hidden = true; ph.hidden = false;
+      fill.style.width = '0%'; cur.textContent = '00:00'; total.textContent = '00:00';
+      link.hidden = true; return;
+    }
+    document.title = 'Now Playing · ' + d.title;
+    title.textContent = d.title || 'Watching something';
+    sub.textContent = [d.episode ? 'Episode ' + d.episode : '', d.site].filter(Boolean).join(' · ');
+    status.className = 'status ' + (d.status === 'playing' ? 'playing' : 'paused');
+    status.textContent = d.status === 'playing' ? 'playing' : 'paused';
+    const dur = d.duration || 0, pos = d.position || 0;
+    if (d.cover) { cover.src = d.cover; cover.hidden = false; ph.hidden = true; }
+    else { cover.hidden = true; ph.hidden = false; }
+    fill.style.width = (dur > 0 ? Math.min(100, pos / dur * 100) : 0) + '%';
+    cur.textContent = fmt(pos); total.textContent = dur > 0 ? fmt(dur) : '??:??';
+    if (d.url) { link.href = d.url; link.textContent = 'Open the page'; link.hidden = false; }
+    else link.hidden = true;
+  }
+  tick(); setInterval(tick, 5000);
+</script>
+</body>
+</html>
+"""
+
 
 class _Handler(BaseHTTPRequestHandler):  # noqa: N801 (underscore-prefixed helper)
     server_version = "AniPresence/1.1"
@@ -50,11 +145,49 @@ class _Handler(BaseHTTPRequestHandler):  # noqa: N801 (underscore-prefixed helpe
         self.end_headers()
 
     def do_GET(self):  # noqa: N802 (BaseHTTPRequestHandler naming)
-        if self.path.rstrip("/") == "/ping":
+        path = self.path.rstrip("/").split("?", 1)[0]
+        if path == "/ping":
             self._authorize_and_reply(empty=True)
+            return
+        if path == "/now.json":
+            self._serve_now_json()
+            return
+        if path == "/now":
+            self._serve_now_page()
             return
         self.send_response(404)
         self.end_headers()
+
+    def _now_snapshot(self):
+        """JSON-ready now-playing snapshot (or None when the provider is missing)."""
+        provider = getattr(self.bridge, "now_provider", None)
+        if not callable(provider):
+            return None
+        try:
+            return provider()
+        except Exception:  # noqa: BLE001 - never let a bad snapshot kill the page
+            return None
+
+    def _serve_now_json(self):
+        """Public GET /now.json: the current presence as JSON (no token needed)."""
+        snapshot = self._now_snapshot() or {}
+        body = json.dumps(snapshot).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self._cors_headers()
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_now_page(self):
+        """Public GET /now: a self-contained page polling /now.json every 5s."""
+        body = NOW_PAGE_HTML.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self._cors_headers()
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_POST(self):  # noqa: N802 (BaseHTTPRequestHandler naming)
         if self.path.rstrip("/") == "/ping":
@@ -120,6 +253,8 @@ class ExtensionBridge:
         self._thread = None
         self._notified_activity = False
         self._notified_reject = 0.0
+        # Set by the controller so GET /now.json can serve a live snapshot.
+        self.now_provider = None
 
     @property
     def port(self):
