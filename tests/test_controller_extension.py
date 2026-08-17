@@ -340,7 +340,7 @@ def test_now_playing_snapshot_flow(tmp_path, app, monkeypatch):
     assert snap["duration"] == 1200.0
     assert snap["cover"] == "https://cdn.example/c.jpg"
     assert snap["episode"] == 5
-    assert snap["version"] == "2.0.3"
+    assert snap["version"] == "2.0.4"
 
     # Privacy mode -> fully idle.
     ctrl.cfg.set(privacy_mode=True)

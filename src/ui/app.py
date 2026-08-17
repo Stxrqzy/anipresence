@@ -4,10 +4,12 @@ Displays live detection state (cover art, title, episode, progress), connection
 status for Chrome and Discord, control toggles, recently-watched history, and a
 scrollback log. The worker thread updates it exclusively through signals.
 """
+import ctypes
 import hashlib
 import sys
 import time
 import webbrowser
+from ctypes import wintypes
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -28,6 +30,59 @@ from PySide6.QtWidgets import (
     QScrollArea, QSpinBox, QStackedWidget, QSystemTrayIcon, QTabBar, QToolButton,
     QVBoxLayout, QWidget,
 )
+
+# ---------------------------------------------------------------------------
+# Native Windows 11 window animations via the DWM "iconic thumbnail" API.
+#
+# Frameless (custom-titlebar) windows normally DON'T get the native
+# minimize-to-taskbar / restore / live-preview animations that every other
+# Windows 11 app has. Setting DWMWA_HAS_ICONIC_BITMAP + DWMWA_FORCE_ICONIC_
+# REPRESENTATION tells the DWM to treat us as a normal window: it asks us for
+# a thumbnail (WM_DWMSENDICONICTHUMBNAIL) and a hover preview
+# (WM_DWMSENDICONICLIVEPREVIEWBITMAP), then plays the real OS animations.
+# ---------------------------------------------------------------------------
+WM_DWMSENDICONICTHUMBNAIL = 0x0323
+WM_DWMSENDICONICLIVEPREVIEWBITMAP = 0x0326
+DWMWA_FORCE_ICONIC_REPRESENTATION = 5
+DWMWA_HAS_ICONIC_BITMAP = 10
+
+
+def _dwm_api():
+    """DWM/GDI handles with correct 64-bit signatures (cached on the module)."""
+    if getattr(_dwm_api, "_cached", None) is not None:
+        return _dwm_api._cached
+
+    class _Dwm:
+        def __init__(self):
+            gdi32 = ctypes.windll.gdi32
+            dwmapi = ctypes.windll.dwmapi
+
+            gdi32.CreateCompatibleDC.restype = wintypes.HDC
+            gdi32.CreateDIBSection.restype = wintypes.HBITMAP
+            gdi32.CreateDIBSection.argtypes = [
+                wintypes.HDC, ctypes.c_void_p, wintypes.UINT,
+                ctypes.POINTER(ctypes.c_void_p), wintypes.HANDLE, wintypes.DWORD,
+            ]
+            gdi32.DeleteDC.restype = wintypes.BOOL
+            gdi32.DeleteObject.restype = wintypes.BOOL
+
+            dwmapi.DwmSetWindowAttribute.restype = ctypes.c_long
+            dwmapi.DwmSetWindowAttribute.argtypes = [
+                wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
+            ]
+            dwmapi.DwmSetIconicThumbnail.restype = ctypes.c_long
+            dwmapi.DwmSetIconicThumbnail.argtypes = [
+                wintypes.HWND, wintypes.HBITMAP, wintypes.DWORD,
+            ]
+            dwmapi.DwmSetIconicLivePreviewBitmap.restype = ctypes.c_long
+            dwmapi.DwmSetIconicLivePreviewBitmap.argtypes = [
+                wintypes.HWND, wintypes.HBITMAP, ctypes.c_void_p, wintypes.DWORD,
+            ]
+            self.gdi32 = gdi32
+            self.dwmapi = dwmapi
+
+    _dwm_api._cached = _Dwm()
+    return _dwm_api._cached
 from PySide6.QtWidgets import QSizePolicy
 
 try:  # QtCharts is optional; the stats chart degrades to a plain label if absent.
@@ -813,14 +868,10 @@ class MainWindow(QMainWindow):
         # Animated minimize/restore state (see _animated_minimize/_animated_restore).
         self._geom_anim = None
         self._fade_anim = None
-        self._minimize_target = None
-        self._restore_geometry = None
-        self._restore_maximized = False
         self._normal_geometry = None
         self._closing_fade = False       # close button started the fade-out
-        self._fly_anim = None            # snapshot fly-out animation (label)
-        self._fly_label = None           # the fly-out tool window
-        self._minimize_snapshot_pm = None  # window grab used for restore
+        self._native_animations = False  # DWM iconic thumbnails enabled
+        self._native_animations_enabled = False  # showEvent ran once
         # Header elements hidden at narrow widths (see _update_header_for_width).
         self._header_hid_chips = False
         self._header_hid_sub = False
@@ -929,92 +980,136 @@ class MainWindow(QMainWindow):
         self._geom_anim = anim  # keep a reference so GC can't kill it mid-flight
 
     def _animated_minimize(self):
-        """Fly the window down toward the taskbar as a snapshot, then minimize.
+        """Minimize with the native Windows 11 fly-to-taskbar animation.
 
-        Animating the real window's geometry repaints the full backdrop + charts
-        on every frame, which is what made this laggy. Instead we grab one
-        snapshot and glide a single-pixmap tool window to the taskbar.
+        With the DWM iconic-thumbnail attributes enabled (see ``showEvent``),
+        Windows animates the window into the taskbar itself, exactly like any
+        other app on Windows 11 - no custom animation needed.
         """
-        self._restore_maximized = self.isMaximized()
-        if self._restore_maximized:
-            self.showNormal()
-        self._restore_geometry = self.geometry()
-        avail = self.screen().availableGeometry()
-        w = max(60, self.width() // 3)
-        h = max(28, self.height() // 6)
-        end = QRect(avail.center().x() - w // 2, avail.bottom() - h, w, h)
-        self._minimize_target = end
-        self._minimize_snapshot_pm = self.grab()
-        self._run_fly_anim(
-            self._minimize_snapshot_pm, self.geometry(), end,
-            self._finish_minimize_anim,
-            duration=190, easing=QEasingCurve.InCubic,  # dart into the taskbar
-        )
-
-    def _finish_minimize_anim(self):
-        self.showMinimized()  # go to the Windows taskbar, not the tray
-
-    def _run_fly_anim(self, snapshot, start, end, on_finish,
-                      duration=220, easing=QEasingCurve.OutCubic):
-        """Play a cheap snapshot fly animation from *start* to *end*.
-
-        The complex main window is hidden during the flight; only a frameless
-        tool window carrying the snapshot moves. It is deliberately OPAQUE
-        (a layered/translucent tool window is recomposed by the DWM on every
-        frame, which is what made this look laggy).
-        """
-        label = QLabel()
-        label.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
-        label.setPixmap(snapshot)
-        label.setGeometry(start)
-        label.show()
-        self.hide()
-
-        def _finish():
-            label.hide()
-            label.deleteLater()
-            self._fly_anim = None
-            self._fly_label = None
-            if on_finish is not None:
-                on_finish()
-
-        anim = QPropertyAnimation(label, b"geometry", label)
-        anim.setDuration(duration)
-        anim.setStartValue(start)
-        anim.setEndValue(end)
-        anim.setEasingCurve(easing)
-        anim.finished.connect(_finish)
-        anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
-        self._fly_anim = anim
-        self._fly_label = label
+        self.showMinimized()
 
     def _animated_restore(self):
-        """Expand back from the tray-minimized size to the last window geometry."""
-        if self._minimize_target is None:
-            self.show()
-            self.raise_()
-            self.activateWindow()
-            return
-        start = self._minimize_target
-        end = self._restore_geometry or self.geometry()
-        self._minimize_target = None
-        snapshot = self._minimize_snapshot_pm or self.grab()
-        self._run_fly_anim(
-            snapshot, start, end,
-            self._finish_restore_anim,
-            duration=240, easing=QEasingCurve.OutCubic,  # glide out and settle
-        )
-
-    def _finish_restore_anim(self):
-        if self._restore_geometry is not None:
-            self.setGeometry(self._restore_geometry)
+        """Restore with the native Windows 11 fly-back animation."""
         self.show()
         self.raise_()
         self.activateWindow()
-        if self._restore_maximized:
-            self.showMaximized()
-            self._restore_maximized = False
-        self._minimize_snapshot_pm = None
+
+    # ------------------------------------------------------------ DWM native
+    def _enable_native_animations(self):
+        """Opt into Windows' own window animations for a frameless window."""
+        try:
+            api = _dwm_api()
+            hwnd = int(self.winId())
+            one = ctypes.c_int(1)
+            api.dwmapi.DwmSetWindowAttribute(
+                hwnd, DWMWA_HAS_ICONIC_BITMAP, ctypes.byref(one), ctypes.sizeof(one)
+            )
+            api.dwmapi.DwmSetWindowAttribute(
+                hwnd, DWMWA_FORCE_ICONIC_REPRESENTATION,
+                ctypes.byref(one), ctypes.sizeof(one),
+            )
+            self._native_animations = True
+        except Exception:  # noqa: BLE001 - non-DWM systems just get plain minimize
+            self._native_animations = False
+
+    def _grab_to_hbitmap(self, pixmap):
+        """Convert a QPixmap into an HBITMAP the DWM can display."""
+        try:
+            api = _dwm_api()
+            img = pixmap.toImage().convertToFormat(QImage.Format_ARGB32_Premultiplied)
+            w, h = img.width(), img.height()
+            if w <= 0 or h <= 0:
+                return None
+
+            class BITMAPINFOHEADER(ctypes.Structure):
+                _fields_ = [
+                    ("biSize", wintypes.DWORD),
+                    ("biWidth", wintypes.LONG),
+                    ("biHeight", wintypes.LONG),
+                    ("biPlanes", wintypes.WORD),
+                    ("biBitCount", wintypes.WORD),
+                    ("biCompression", wintypes.DWORD),
+                    ("biSizeImage", wintypes.DWORD),
+                    ("biXPelsPerMeter", wintypes.LONG),
+                    ("biYPelsPerMeter", wintypes.LONG),
+                    ("biClrUsed", wintypes.DWORD),
+                    ("biClrImportant", wintypes.DWORD),
+                ]
+
+            bih = BITMAPINFOHEADER()
+            bih.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+            bih.biWidth = w
+            bih.biHeight = -h  # top-down rows match QImage
+            bih.biPlanes = 1
+            bih.biBitCount = 32
+
+            hdc = api.gdi32.CreateCompatibleDC(None)
+            bits = ctypes.c_void_p()
+            hbmp = api.gdi32.CreateDIBSection(
+                hdc, ctypes.byref(bih), 0, ctypes.byref(bits), None, 0
+            )
+            api.gdi32.DeleteDC(hdc)
+            if not hbmp or not bits:
+                return None
+            src = img.constBits()
+            try:
+                src_addr = int(src)
+            except (TypeError, ValueError):
+                src_addr = None
+            if src_addr:
+                ctypes.memmove(bits, src_addr, w * h * 4)
+            else:
+                ctypes.memmove(bits, bytes(src), w * h * 4)
+            return hbmp
+        except Exception:  # noqa: BLE001 - never break the UI for a thumbnail
+            return None
+
+    def _dwm_send_thumbnail(self, pixmap):
+        hbmp = self._grab_to_hbitmap(pixmap)
+        if not hbmp:
+            return
+        try:
+            _dwm_api().dwmapi.DwmSetIconicThumbnail(int(self.winId()), hbmp, 0)
+        finally:
+            _dwm_api().gdi32.DeleteObject(hbmp)
+
+    def _dwm_send_preview(self, pixmap):
+        hbmp = self._grab_to_hbitmap(pixmap)
+        if not hbmp:
+            return
+        try:
+            _dwm_api().dwmapi.DwmSetIconicLivePreviewBitmap(
+                int(self.winId()), hbmp, None, 0
+            )
+        finally:
+            _dwm_api().gdi32.DeleteObject(hbmp)
+
+    def nativeEvent(self, eventType, message):  # noqa: N802 (Qt naming)
+        """Serve DWM the window snapshots it needs for native animations."""
+        if not getattr(self, "_native_animations", False) or self.isMinimized():
+            return super().nativeEvent(eventType, message)
+        try:
+            msg = wintypes.MSG.from_address(int(message))
+        except Exception:  # noqa: BLE001
+            return super().nativeEvent(eventType, message)
+        if msg.message == WM_DWMSENDICONICTHUMBNAIL:
+            max_w = msg.lParam & 0xFFFF
+            max_h = (msg.lParam >> 16) & 0xFFFF
+            grab = self.grab()
+            if max_w and max_h:
+                grab = grab.scaled(max_w, max_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self._dwm_send_thumbnail(grab)
+            return True, 0
+        if msg.message == WM_DWMSENDICONICLIVEPREVIEWBITMAP:
+            self._dwm_send_preview(self.grab())
+            return True, 0
+        return super().nativeEvent(eventType, message)
+
+    def showEvent(self, event):  # noqa: N802 (Qt naming)
+        if not getattr(self, "_native_animations_enabled", False):
+            self._native_animations_enabled = True
+            self._enable_native_animations()
+        super().showEvent(event)
 
     def changeEvent(self, event):  # noqa: N802 (Qt naming)
         from PySide6.QtCore import QEvent
@@ -1022,16 +1117,6 @@ class MainWindow(QMainWindow):
             btn = self.win_max_btn
             if btn.underMouse():
                 btn.setText(btn._current_glyph())
-            # Restored from the taskbar (Windows already plays its own native
-            # animation), so just finalize state and add a quick fade-in.
-            if (
-                self._minimize_target is not None
-                and not self.isMinimized()
-                and not self.isMaximized()
-            ):
-                self._minimize_target = None
-                self._finish_restore_anim()
-                self._fade_in_restore()
         super().changeEvent(event)
 
     def _update_header_for_width(self):
@@ -4476,24 +4561,6 @@ class MainWindow(QMainWindow):
         self._stop_tunnel()
         self.controller.request_stop()
         super().closeEvent(event)
-
-    def _fade_in_restore(self):
-        """Fade the window back in when it's restored from the taskbar.
-
-        Windows restores the window instantly at full size, so a short opacity
-        fade (DWM-accelerated, cheap) gives the entry a smooth, fresh feel.
-        """
-        if self._fade_anim is not None:
-            self._fade_anim.stop()
-        self.setWindowOpacity(0.0)
-        anim = QPropertyAnimation(self, b"windowOpacity", self)
-        anim.setDuration(180)
-        anim.setStartValue(0.0)
-        anim.setEndValue(1.0)
-        anim.setEasingCurve(QEasingCurve.OutCubic)
-        anim.finished.connect(lambda: self.setWindowOpacity(1.0))
-        anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
-        self._fade_anim = anim
 
     def _fade_out_on_close(self):
         """Fade the whole window out smoothly before quitting."""
