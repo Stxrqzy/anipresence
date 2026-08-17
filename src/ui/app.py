@@ -4210,6 +4210,8 @@ class MainWindow(QMainWindow):
         import shutil
         import subprocess
         import threading
+        import time
+        import urllib.request
 
         exe = shutil.which("cloudflared")
         if not exe:
@@ -4226,8 +4228,27 @@ class MainWindow(QMainWindow):
             stderr=subprocess.PIPE,
         )
         self._tunnel_proc = proc
-        self.share_tunnel_btn.setText("Stop tunnel")
+        self.share_tunnel_btn.setText("Starting tunnel…")
         self.share_tunnel_btn.setEnabled(False)
+
+        def _wait_reachable(public, timeout=75.0):
+            """Poll the public URL until Cloudflare routes it to us.
+
+            A brand-new quick tunnel's hostname can take ~30s to resolve (and
+            the local resolver often caches the lookup miss), so opening the
+            link the instant we copy it fails. Wait until /now.json answers.
+            """
+            probe = public + "/now.json"
+            end = time.monotonic() + timeout
+            while time.monotonic() < end:
+                try:
+                    with urllib.request.urlopen(probe, timeout=10) as resp:
+                        if resp.status == 200:
+                            return True
+                except Exception:  # noqa: BLE001 - DNS/route not ready yet
+                    pass
+                time.sleep(3)
+            return False
 
         def _watch():
             while proc.poll() is None:
@@ -4237,7 +4258,14 @@ class MainWindow(QMainWindow):
                 line = raw.decode("utf-8", "replace")
                 m = re.search(r"https://[a-z0-9-]+\.trycloudflare\.com", line)
                 if m:
-                    self.bridge.share_tunnel.emit(m.group(0))
+                    public = m.group(0)
+                    if not _wait_reachable(public):
+                        self._log_line(
+                            "Tunnel link handed out before it became reachable; "
+                            "DNS may need another moment"
+                        )
+                    # Link to the page itself, not the bare hostname (which 404s).
+                    self.bridge.share_tunnel.emit(public + "/now")
                     return
             self.bridge.share_tunnel.emit("")  # died before handing out a URL
 
@@ -4260,6 +4288,7 @@ class MainWindow(QMainWindow):
             self._notify("Share", "The tunnel failed to start. Is cloudflared installed?")
             return
         QApplication.clipboard().setText(public)
+        self.share_tunnel_btn.setText("Stop tunnel")
         self.share_tunnel_btn.setEnabled(True)
         self._log_line(f"Tunnel live: {public} (copied to clipboard)")
         self._notify("Share", f"Public link copied:\n{public}")

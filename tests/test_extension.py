@@ -125,6 +125,20 @@ def test_unknown_path_404():
         bridge.stop()
 
 
+def test_root_redirects_to_now_page():
+    """A bare tunnel hostname (GET /) must land on the Now Playing page."""
+    bridge, port = _start_bridge(token="secret")
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/")
+        resp = conn.getresponse()
+        resp.read()
+        assert resp.status == 302
+        assert resp.getheader("Location") == "/now"
+    finally:
+        bridge.stop()
+
+
 def test_options_cors_headers():
     bridge, port = _start_bridge(token="secret")
     try:

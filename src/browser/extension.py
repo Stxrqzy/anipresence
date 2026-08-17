@@ -146,6 +146,13 @@ class _Handler(BaseHTTPRequestHandler):  # noqa: N801 (underscore-prefixed helpe
 
     def do_GET(self):  # noqa: N802 (BaseHTTPRequestHandler naming)
         path = self.path.rstrip("/").split("?", 1)[0]
+        if path == "":
+            # A bare tunnel hostname (e.g. the quick-tunnel link people type
+            # after copying) lands here; point it at the Now Playing page.
+            self.send_response(302)
+            self.send_header("Location", "/now")
+            self.end_headers()
+            return
         if path == "/ping":
             self._authorize_and_reply(empty=True)
             return
