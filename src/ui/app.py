@@ -817,6 +817,10 @@ class MainWindow(QMainWindow):
         self._restore_geometry = None
         self._restore_maximized = False
         self._normal_geometry = None
+        self._closing_fade = False       # close button started the fade-out
+        self._fly_anim = None            # snapshot fly-out animation (label)
+        self._fly_label = None           # the fly-out tool window
+        self._minimize_snapshot_pm = None  # window grab used for restore
         # Header elements hidden at narrow widths (see _update_header_for_width).
         self._header_hid_chips = False
         self._header_hid_sub = False
@@ -925,24 +929,58 @@ class MainWindow(QMainWindow):
         self._geom_anim = anim  # keep a reference so GC can't kill it mid-flight
 
     def _animated_minimize(self):
-        """Shrink the window down toward the taskbar, then minimize it there."""
+        """Fly the window down toward the taskbar as a snapshot, then minimize.
+
+        Animating the real window's geometry repaints the full backdrop + charts
+        on every frame, which is what made this laggy. Instead we grab one
+        snapshot and glide a single-pixmap tool window to the taskbar.
+        """
         self._restore_maximized = self.isMaximized()
         if self._restore_maximized:
-            self.showNormal()  # animate from the restored size
+            self.showNormal()
         self._restore_geometry = self.geometry()
         avail = self.screen().availableGeometry()
         w = max(60, self.width() // 3)
         h = max(28, self.height() // 6)
         end = QRect(avail.center().x() - w // 2, avail.bottom() - h, w, h)
         self._minimize_target = end
-        self._run_geom_anim(
-            self.geometry(), end,
-            duration=300, easing=QEasingCurve.OutCubic, on_finish=self._finish_minimize_anim,
-        )
+        self._minimize_snapshot_pm = self.grab()
+        self._run_fly_anim(self._minimize_snapshot_pm, self.geometry(), end, self._finish_minimize_anim)
 
     def _finish_minimize_anim(self):
         self.showMinimized()  # go to the Windows taskbar, not the tray
-        self._geom_anim = None
+
+    def _run_fly_anim(self, snapshot, start, end, on_finish):
+        """Play a cheap snapshot fly animation from *start* to *end*.
+
+        The complex main window is hidden during the flight; only a frameless
+        tool window carrying the snapshot moves, so the animation stays smooth.
+        """
+        label = QLabel()
+        label.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        label.setAttribute(Qt.WA_TranslucentBackground)
+        label.setPixmap(snapshot)
+        label.setGeometry(start)
+        label.show()
+        self.hide()
+
+        def _finish():
+            label.hide()
+            label.deleteLater()
+            self._fly_anim = None
+            self._fly_label = None
+            if on_finish is not None:
+                on_finish()
+
+        anim = QPropertyAnimation(label, b"geometry", label)
+        anim.setDuration(230)
+        anim.setStartValue(start)
+        anim.setEndValue(end)
+        anim.setEasingCurve(QEasingCurve.InOutCubic)
+        anim.finished.connect(_finish)
+        anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+        self._fly_anim = anim
+        self._fly_label = label
 
     def _animated_restore(self):
         """Expand back from the tray-minimized size to the last window geometry."""
@@ -951,21 +989,22 @@ class MainWindow(QMainWindow):
             self.raise_()
             self.activateWindow()
             return
+        start = self._minimize_target
+        end = self._restore_geometry or self.geometry()
+        self._minimize_target = None
+        snapshot = self._minimize_snapshot_pm or self.grab()
+        self._run_fly_anim(snapshot, start, end, self._finish_restore_anim)
+
+    def _finish_restore_anim(self):
+        if self._restore_geometry is not None:
+            self.setGeometry(self._restore_geometry)
         self.show()
         self.raise_()
         self.activateWindow()
-        end = self._restore_geometry or self.geometry()
-        self._minimize_target = None
-        self._run_geom_anim(
-            self.geometry(), end,
-            duration=320, easing=QEasingCurve.OutCubic, on_finish=self._finish_restore_anim,
-        )
-
-    def _finish_restore_anim(self):
         if self._restore_maximized:
             self.showMaximized()
-        self._restore_maximized = False
-        self._geom_anim = None
+            self._restore_maximized = False
+        self._minimize_snapshot_pm = None
 
     def changeEvent(self, event):  # noqa: N802 (Qt naming)
         from PySide6.QtCore import QEvent
@@ -973,19 +1012,15 @@ class MainWindow(QMainWindow):
             btn = self.win_max_btn
             if btn.underMouse():
                 btn.setText(btn._current_glyph())
-            # Restored from the taskbar: bounce back to the pre-minimize geometry.
+            # Restored from the taskbar (Windows already plays its own native
+            # animation), so just finalize state instead of animating again.
             if (
                 self._minimize_target is not None
                 and not self.isMinimized()
                 and not self.isMaximized()
             ):
-                start = self.geometry()
-                end = self._restore_geometry or start
                 self._minimize_target = None
-                self._run_geom_anim(
-                    start, end,
-                    duration=320, easing=QEasingCurve.OutCubic, on_finish=self._finish_restore_anim,
-                )
+                self._finish_restore_anim()
         super().changeEvent(event)
 
     def _update_header_for_width(self):
@@ -4419,8 +4454,27 @@ class MainWindow(QMainWindow):
             event.ignore()
             self._animated_hide_to_tray()
             return
+        if not self._quitting and not self._closing_fade:
+            # Close button pressed: fade the window out, then really close.
+            event.ignore()
+            self._closing_fade = True
+            self._fade_out_on_close()
+            return
         self._save_window_state()
         self._unregister_hotkey()
         self._stop_tunnel()
         self.controller.request_stop()
         super().closeEvent(event)
+
+    def _fade_out_on_close(self):
+        """Fade the whole window out smoothly before quitting."""
+        if self._fade_anim is not None:
+            self._fade_anim.stop()
+        anim = QPropertyAnimation(self, b"windowOpacity", self)
+        anim.setDuration(200)
+        anim.setStartValue(1.0)
+        anim.setEndValue(0.0)
+        anim.setEasingCurve(QEasingCurve.InOutCubic)
+        anim.finished.connect(self.close)
+        anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+        self._fade_anim = anim
