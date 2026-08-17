@@ -804,6 +804,9 @@ class MainWindow(QMainWindow):
         self._library_icon_fetching = set()
         self._notified_airing = set()  # (anilist_id, episode) pairs already announced
         self._tunnel_proc = None      # cloudflared subprocess for the share tunnel
+        self._match_icon_pending = {}  # cover-url -> QToolButton (match chooser)
+        self._match_icon_fetching = set()
+        self._match_panel_url = None   # page URL the match chooser is pinned to
         self._continue_icon_pending = {}  # cover-url -> QToolButton (continue strip)
         self._continue_icon_fetching = set()
         self._title_drag = None
@@ -1446,6 +1449,22 @@ class MainWindow(QMainWindow):
         self.match_label.setWordWrap(True)
         info.addWidget(self.match_label)
 
+        self.match_chooser = QWidget()
+        chooser_lay = QVBoxLayout(self.match_chooser)
+        chooser_lay.setContentsMargins(0, 0, 0, 0)
+        chooser_lay.setSpacing(6)
+        self.match_chooser_label = QLabel("Did you mean?")
+        self.match_chooser_label.setObjectName("sectionLabel")
+        chooser_lay.addWidget(self.match_chooser_label)
+        self.match_chooser_row = QHBoxLayout()
+        self.match_chooser_row.setSpacing(6)
+        chooser_lay.addLayout(self.match_chooser_row)
+        self.match_chooser_actions = QHBoxLayout()
+        self.match_chooser_actions.setSpacing(6)
+        chooser_lay.addLayout(self.match_chooser_actions)
+        self.match_chooser.hide()
+        info.addWidget(self.match_chooser)
+
         info.addSpacing(6)
         self.progress = QProgressBar()
         self.progress.setRange(0, 1000)
@@ -1793,6 +1812,12 @@ class MainWindow(QMainWindow):
         self.library_refresh_btn.clicked.connect(self._on_refresh_library)
         header.addWidget(self.library_refresh_btn)
         layout.addLayout(header)
+
+        self.library_search = QLineEdit()
+        self.library_search.setPlaceholderText("Filter by title, genre, or score…")
+        self.library_search.setClearButtonEnabled(True)
+        self.library_search.textChanged.connect(self._on_library_search)
+        layout.addWidget(self.library_search)
 
         self._library_tabs = QTabBar()
         self._library_tabs.setDrawBase(False)
@@ -2426,6 +2451,7 @@ class MainWindow(QMainWindow):
                 if not self.cfg.data.privacy_mode and e.get("url"):
                     item.setToolTip(e["url"])
                 item.setData(Qt.UserRole + 1, e)
+                item.setData(Qt.UserRole + 2, e.get("keywords") or "")
                 cover = e.get("cover") or ""
                 if cover:
                     cached = self._cover_cache_path(cover)
@@ -2437,7 +2463,38 @@ class MainWindow(QMainWindow):
                             self._library_icon_fetching.add(cover)
                             self._nam.get(QNetworkRequest(QUrl(cover)))
                 listw.addItem(item)
+        self._apply_library_filter()
         self._maybe_notify_airing(sections)
+
+    def _on_library_search(self, _text):
+        self._apply_library_filter()
+
+    def _apply_library_filter(self):
+        """Narrow the current status lists and calendar by the filter text."""
+        query = (self.library_search.text() or "").strip().lower()
+        for listw in self._library_section_lists.values():
+            self._filter_list_items(listw, query)
+        self._filter_calendar(query)
+
+    @staticmethod
+    def _filter_list_items(listw, query):
+        if not query:
+            for i in range(listw.count()):
+                listw.item(i).setHidden(False)
+            return
+        for i in range(listw.count()):
+            item = listw.item(i)
+            item.setHidden(query not in (item.data(Qt.UserRole + 2) or ""))
+
+    def _filter_calendar(self, query):
+        listw = self._calendar_list
+        if not query:
+            for i in range(listw.count()):
+                listw.item(i).setHidden(False)
+            return
+        for i in range(listw.count()):
+            item = listw.item(i)
+            item.setHidden(query not in (item.data(Qt.UserRole + 2) or ""))
 
     def _maybe_notify_airing(self, sections):
         """Tray-notify once per episode when a followed show airs within 24h."""
@@ -2513,6 +2570,7 @@ class MainWindow(QMainWindow):
                 if not self.cfg.data.privacy_mode and e.get("url"):
                     item.setToolTip(e["url"])
                 item.setData(Qt.UserRole + 1, e)
+                item.setData(Qt.UserRole + 2, e.get("keywords") or "")
                 cover = e.get("cover") or ""
                 if cover:
                     cached = self._cover_cache_path(cover)
@@ -2524,6 +2582,7 @@ class MainWindow(QMainWindow):
                             self._library_icon_fetching.add(cover)
                             self._nam.get(QNetworkRequest(QUrl(cover)))
                 listw.addItem(item)
+        self._apply_library_filter()
 
     def _refresh_sections(self):
         """Fill the Watching/Planning/Completed lists from the imported lists."""
@@ -2656,13 +2715,20 @@ class MainWindow(QMainWindow):
         self._animate_tab_in(self.stack.currentWidget())
 
     def _animate_tab_in(self, widget):
-        """Fade the incoming tab in from transparent (skipped pre-show)."""
+        """Fade the incoming tab in from transparent (skipped pre-show).
+
+        Heavy pages (charts, long lists, settings) repaint too slowly for a
+        full-widget opacity fade to stay at 60fps, so they switch instantly
+        while lightweight tabs get a quick, crisp fade.
+        """
         if not self.isVisible():
+            return
+        if widget in (self._stats_page, self._settings_page, self._library_page):
             return
         effect = QGraphicsOpacityEffect(widget)
         widget.setGraphicsEffect(effect)
         anim = QPropertyAnimation(effect, b"opacity", self)
-        anim.setDuration(180)
+        anim.setDuration(120)
         anim.setStartValue(0.0)
         anim.setEndValue(1.0)
         anim.setEasingCurve(QEasingCurve.OutCubic)
@@ -2706,6 +2772,7 @@ class MainWindow(QMainWindow):
         self.bridge.library_loaded.connect(self._on_library_loaded)
         self.bridge.calendar_loaded.connect(self._on_calendar_loaded)
         self.bridge.share_tunnel.connect(self._on_tunnel_public_url)
+        self.bridge.match_pending.connect(self._on_match_pending)
         self.bridge.log.connect(self._on_log)
 
         self.rpc_check.toggled.connect(lambda on: self._on_rpc_toggled(on))
@@ -3136,6 +3203,8 @@ class MainWindow(QMainWindow):
             self.show_placeholder()
             return
         self._current_payload = payload
+        if self._match_panel_url and self._match_panel_url != payload.get("url"):
+            self._hide_match_chooser()
         title = payload.get("title") or "Unknown title"
         self.anime_title.setText(title)
 
@@ -3798,6 +3867,26 @@ class MainWindow(QMainWindow):
                     btn.setIconSize(QSize(30, 42))
             reply.deleteLater()
             return
+        elif orig in self._match_icon_pending:
+            # "Did you mean?" candidate button.
+            self._match_icon_fetching.discard(orig)
+            btn = self._match_icon_pending.pop(orig)
+            if reply.error() == QNetworkReply.NoError:
+                data = bytes(reply.readAll())
+                pixmap = QPixmap()
+                if pixmap.loadFromData(data):
+                    cached = self._cover_cache_path(orig)
+                    try:
+                        if not self._cover_cache_dir.exists():
+                            self._cover_cache_dir.mkdir(parents=True, exist_ok=True)
+                        if not cached.exists():
+                            cached.write_bytes(data)
+                    except OSError:
+                        pass
+                    btn.setIcon(QIcon(str(cached)))
+                    btn.setIconSize(QSize(30, 42))
+            reply.deleteLater()
+            return
         else:
             item = None
         if item is not None:
@@ -3922,6 +4011,82 @@ class MainWindow(QMainWindow):
     def _open_anilist(self):
         if self._current_payload and self._current_payload.get("anilist_url"):
             webbrowser.open(self._current_payload["anilist_url"])
+
+    def _on_match_pending(self, payload):
+        """Populate the inline "Did you mean?" chooser for a shaky match."""
+        self._match_panel_url = payload.get("url") or ""
+        self._clear_match_chooser()
+        candidates = payload.get("candidates") or []
+        current_title = payload.get("current_title") or ""
+        conf = payload.get("confidence") or 0
+        self.match_chooser_label.setText(
+            f"Did you mean? · AniList match was only {conf:.0f}% confident"
+        )
+        for cand in candidates:
+            btn = QToolButton()
+            btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+            btn.setText(cand.get("title") or "?")
+            btn.setToolTip(
+                (cand.get("title") or "") + ("  ·  current pick" if cand.get("is_current") else "")
+            )
+            btn.setIconSize(QSize(30, 42))
+            if cand.get("is_current"):
+                btn.setProperty("current", True)
+                btn.setStyleSheet("QToolButton { border: 1px solid palette(highlight); }")
+            url = cand.get("url") or ""
+            title = cand.get("title") or ""
+            btn.clicked.connect(
+                lambda _=False, u=url, t=title: self._on_match_choice(u, t)
+            )
+            self.match_chooser_row.addWidget(btn)
+            cover = cand.get("cover") or ""
+            if cover:
+                cached = self._cover_cache_path(cover)
+                if cached.exists():
+                    btn.setIcon(QIcon(str(cached)))
+                else:
+                    self._match_icon_pending[cover] = btn
+                    if cover not in self._match_icon_fetching:
+                        self._match_icon_fetching.add(cover)
+                        self._nam.get(QNetworkRequest(QUrl(cover)))
+        if current_title and not any(c.get("is_current") for c in candidates):
+            use_btn = QPushButton(f"Use '{current_title}'")
+            use_btn.setObjectName("ghost")
+            use_btn.setToolTip("Lock in the auto-detected match for this page.")
+            use_btn.clicked.connect(
+                lambda _=False, u=self._match_panel_url, t=current_title: self._on_match_choice(u, t)
+            )
+            self.match_chooser_actions.addWidget(use_btn)
+        dismiss_btn = QPushButton("Not these")
+        dismiss_btn.setObjectName("ghost")
+        dismiss_btn.setToolTip("Hide this suggestion; it will not come back for a minute.")
+        dismiss_btn.clicked.connect(self._hide_match_chooser)
+        self.match_chooser_actions.addWidget(dismiss_btn)
+        self.match_chooser.show()
+
+    def _clear_match_chooser(self):
+        while self.match_chooser_row.count():
+            item = self.match_chooser_row.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        while self.match_chooser_actions.count():
+            item = self.match_chooser_actions.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _hide_match_chooser(self):
+        self._match_panel_url = None
+        self._clear_match_chooser()
+        self.match_chooser.hide()
+
+    def _on_match_choice(self, url, title):
+        """Pin the user's pick to this page so it never needs fixing again."""
+        self.controller.set_manual_override(url, title, None)
+        self._hide_match_chooser()
+        self._log_line(f"Match fixed for {url}: {title}")
+        self._notify("AniPresence", f"Using '{title}' for this page.")
 
     def _on_wrong_match(self):
         url = self._current_payload.get("url") if self._current_payload else None

@@ -399,6 +399,95 @@ def test_now_http_endpoints(tmp_path, app, monkeypatch):
         ctrl.extension.stop()
 
 
+def test_vencord_presence_name_is_anime(tmp_path, app, monkeypatch):
+    """The Discord activity must read "Watching Anime", not "Watching AniPresence"."""
+    from src.browser.detectors import Detection
+    from src.core.controller import CurrentSession
+
+    ctrl = make_controller(tmp_path)
+    cfg = ctrl.cfg.data
+    cfg.rpc_enabled = True
+    cfg.rpc_broadcast = "vencord"
+
+    sent = {}
+
+    def fake_send(activity, sig):
+        sent.update(activity)
+        return True
+
+    monkeypatch.setattr(ctrl.vencord, "send", fake_send)
+    monkeypatch.setattr(ctrl, "_set_discord_status", lambda *a, **k: None)
+
+    detection = Detection(
+        website="GoGoAnime",
+        url="https://gogoanime.example/watch/demon-slayer-episode-5",
+        raw_title="Demon Slayer - Watch Episode 5",
+        cleaned_title="Demon Slayer",
+        episode=5,
+        video=VideoState(has_video=True, current_time=100.0, duration=1440.0, paused=False),
+    )
+    ctrl._current = CurrentSession(detection, None, 100.0, time.time() - 100.0, "key")
+    ctrl._last_sent = None
+    ctrl._sync_presence()
+    assert sent.get("name") == "Anime"
+    assert sent.get("details") == "Demon Slayer"  # no "Watching: " prefix
+
+
+def test_prompt_match_emits_and_throttles(tmp_path, app, monkeypatch):
+    from src.anime.anilist import Media
+    from src.browser.detectors import Detection
+
+    ctrl = make_controller(tmp_path)
+
+    class Capture:
+        def __init__(self):
+            self.calls = []
+
+        def emit(self, *args):
+            self.calls.append(args)
+
+    cap = Capture()
+    monkeypatch.setattr(ctrl.bridge, "match_pending", cap)
+
+    detection = Detection(
+        website="gogoanime",
+        url="https://gogoanime.example/watch/x",
+        raw_title="X",
+        cleaned_title="X",
+        video=VideoState(),
+    )
+    results = [
+        Media(id=1, title_romaji="One Piece", cover_large="https://c/op.jpg",
+              site_url="https://anilist.co/anime/1"),
+    ]
+    ctrl._prompt_match(detection, results, "X", results[0], 55.0)
+    assert len(cap.calls) == 1
+    payload = cap.calls[0][0]
+    assert payload["url"] == detection.url
+    assert payload["confidence"] == 55
+    assert payload["candidates"][0]["title"] == "One Piece"
+    assert payload["candidates"][0]["is_current"] is True
+    assert payload["candidates"][0]["cover"] == "https://c/op.jpg"
+
+    ctrl._prompt_match(detection, results, "X", results[0], 55.0)
+    assert len(cap.calls) == 1  # throttled to once per minute
+
+
+def test_build_library_sections_includes_keywords(tmp_path, app):
+    from src.anime.anilist import Media
+
+    ctrl = make_controller(tmp_path)
+    media = Media(id=1, title_romaji="Show A", episodes=12,
+                  genres=["Action", "Drama"], mean_score=80)
+    sections = ctrl._build_library_sections(
+        [{"media": media, "status": "CURRENT", "progress": 5}]
+    )
+    entry = sections["Watching"][0]
+    assert "show a" in entry["keywords"]
+    assert "action" in entry["keywords"]
+    assert "80" in entry["keywords"]
+
+
 def test_full_http_roundtrip(tmp_path, app, monkeypatch):
     ctrl = make_controller(tmp_path)
     monkeypatch.setattr(ctrl, "_resolve_anime", lambda detection: (None, 0.0))

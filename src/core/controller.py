@@ -137,6 +137,7 @@ class Controller:
         self.extension.now_provider = self.now_playing
 
         self._anilist_miss = {}                  # search key -> last-failed timestamp
+        self._match_prompted = {}                # url -> last time we offered candidates
         # internal state
         self._current = None                 # CurrentSession | None
         self._next_data_cache = {}           # target_id -> (url, json_str)
@@ -712,10 +713,50 @@ class Controller:
                     f"Low-confidence AniList match ({confidence:.0f}%) for '{search}' -> "
                     f"'{media.display_title()}'"
                 )
+                self._prompt_match(detection, results, search, media, confidence)
         else:
             self._anilist_miss[key] = now
             self.bridge.log.emit(f"No AniList match found for '{search}'")
+            if results:
+                self._prompt_match(detection, results, search, None, 0.0)
         return media, confidence
+
+    def _prompt_match(self, detection, results, search, current, confidence):
+        """Offer the user an inline picker when the automatic match is shaky.
+
+        Runs from the worker thread; throttled to one prompt per URL per minute
+        so a misdetected page doesn't spam the UI on every poll tick. Choosing
+        a candidate calls ``set_manual_override`` which pins that title to the
+        URL, so a wrong guess only needs fixing once.
+        """
+        now = time.time()
+        if now - self._match_prompted.get(detection.url, 0.0) < 60.0:
+            return
+        self._match_prompted[detection.url] = now
+        candidates = [
+            {
+                "id": m.id,
+                "title": m.display_title(),
+                "cover": m.cover_large or m.cover_extra_large,
+                "url": m.site_url,
+                "episodes": m.episodes,
+                "is_current": m is current,
+            }
+            for m in results[:5]
+        ]
+        self.bridge.match_pending.emit(
+            {
+                "url": detection.url,
+                "search": search,
+                "current_title": (
+                    current.display_title()
+                    if current is not None
+                    else (detection.cleaned_title or detection.raw_title)
+                ),
+                "confidence": round(confidence),
+                "candidates": candidates,
+            }
+        )
 
     # -------------------------------------------------------------- session
     def _update_session(self, detection, media, confidence):
@@ -1010,12 +1051,19 @@ class Controller:
                     "anilist_id": media.id,
                     "episodes": media.episodes,
                     "mean_score": media.mean_score,
+                    "genres": list(media.genres),
                     "season": media.season,
                     "season_year": media.season_year,
                     "next_airing_at": media.next_airing_at,
                     "next_airing_episode": media.next_airing_episode,
                     "in_library": status is not None,
                     "library_status": status or "",
+                    "keywords": " ".join(
+                        [media.display_title()]
+                        + list(media.genres)
+                        + ([str(media.mean_score)] if media.mean_score else [])
+                        + ([media.season] if media.season else [])
+                    ).lower(),
                 }
             )
         # Soonest-to-air first; unannounced (None) entries trail behind.
@@ -1041,8 +1089,14 @@ class Controller:
                 "progress": progress,
                 "episodes": media.episodes,
                 "mean_score": media.mean_score,
+                "genres": list(media.genres),
                 "next_airing_at": media.next_airing_at,
                 "next_airing_episode": media.next_airing_episode,
+                "keywords": " ".join(
+                    [media.display_title()]
+                    + list(media.genres)
+                    + ([str(media.mean_score)] if media.mean_score else [])
+                ).lower(),
             }
             if status in ("CURRENT", "REPEATING", "WATCHING"):
                 sections["Watching"].append(entry)
@@ -1177,7 +1231,7 @@ class Controller:
                 media.next_airing_at, media.next_airing_episode, detection.episode
             )
 
-        details = f"Watching: {title}"[:128]
+        details = title[:128]
         if video.paused:
             state = ("Paused · " + episode) if episode else "Paused"
         else:
@@ -1316,7 +1370,7 @@ class Controller:
         end = payload.get("end") or payload.get("timestamps", {}).get("end")
         vencord_activity = {
             "application_id": self.cfg.data.discord_application_id,
-            "name": "AniPresence",
+            "name": "Anime",
             "type": 3,  # ActivityType.WATCHING
             "details": details[:128],
             "state": payload.get("state") or "",

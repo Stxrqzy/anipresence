@@ -20,6 +20,7 @@ class UiBridge(QObject):
     library_loaded = Signal(dict)         # {"username", "sections", "message"}
     calendar_loaded = Signal(dict)         # {"username", "season", "entries", "message"}
     share_tunnel = Signal(str)             # public trycloudflare URL ("" = failed)
+    match_pending = Signal(dict)           # low-confidence match candidates for the chooser
 
 
 class QtLogHandler(logging.Handler):
