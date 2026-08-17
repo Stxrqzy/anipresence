@@ -35,6 +35,10 @@ NOW_PAGE_HTML = """<!doctype html>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
+  /* The .cover / .placeholder rules below set an explicit `display`, which
+     overrides the UA's [hidden]{display:none} - so the hidden attribute alone
+     would leave BOTH boxes visible. Force it here. */
+  [hidden] { display: none !important; }
   body { margin: 0; min-height: 100vh; display: flex; align-items: center;
          justify-content: center; background: #0e1013; color: #e6e8eb;
          font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }

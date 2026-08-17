@@ -2,7 +2,7 @@
 import http.client
 import json
 
-from src.browser.extension import ExtensionBridge, ensure_token
+from src.browser.extension import ExtensionBridge, NOW_PAGE_HTML, ensure_token
 
 
 class FakeClock:
@@ -137,6 +137,17 @@ def test_root_redirects_to_now_page():
         assert resp.getheader("Location") == "/now"
     finally:
         bridge.stop()
+
+
+def test_now_page_hides_cover_and_placeholder_with_css():
+    """The .cover/.placeholder display rules must not defeat the hidden attr.
+
+    Without a `[hidden]` rule the Now Playing page would render BOTH the cover
+    image and the "?" placeholder at the same time (see the CSS comment).
+    """
+    assert "[hidden] { display: none !important; }" in NOW_PAGE_HTML
+    assert 'class="cover" alt="cover" hidden' in NOW_PAGE_HTML
+    assert '<div class="placeholder" id="ph">?</div>' in NOW_PAGE_HTML
 
 
 def test_options_cors_headers():
