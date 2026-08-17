@@ -32,57 +32,80 @@ from PySide6.QtWidgets import (
 )
 
 # ---------------------------------------------------------------------------
-# Native Windows 11 window animations via the DWM "iconic thumbnail" API.
+# Native Windows 11 window animations for the frameless window.
 #
-# Frameless (custom-titlebar) windows normally DON'T get the native
-# minimize-to-taskbar / restore / live-preview animations that every other
-# Windows 11 app has. Setting DWMWA_HAS_ICONIC_BITMAP + DWMWA_FORCE_ICONIC_
-# REPRESENTATION tells the DWM to treat us as a normal window: it asks us for
-# a thumbnail (WM_DWMSENDICONICTHUMBNAIL) and a hover preview
-# (WM_DWMSENDICONICLIVEPREVIEWBITMAP), then plays the real OS animations.
+# A Qt FramelessWindowHint window is a WS_POPUP, which the DWM will NOT play
+# the normal minimize/restore/maximize animations for. The fix (used by
+# PyQt-Frameless-Window, Chromium and Discord) is to keep the window frameless
+# but re-add the caption frame bits after creation: DWM then treats us like a
+# regular window for animation purposes. WM_NCCALCSIZE is handled to (a) hide
+# the OS caption (client = full window) and (b) keep the maximized client
+# inside the monitor work area so the taskbar stays visible.
 # ---------------------------------------------------------------------------
-WM_DWMSENDICONICTHUMBNAIL = 0x0323
-WM_DWMSENDICONICLIVEPREVIEWBITMAP = 0x0326
-DWMWA_FORCE_ICONIC_REPRESENTATION = 5
-DWMWA_HAS_ICONIC_BITMAP = 10
+WM_NCCALCSIZE = 0x0083
+GWL_STYLE = -16
+WS_CAPTION = 0x00C00000
+WS_THICKFRAME = 0x00040000
+WS_SYSMENU = 0x00080000
+WS_MINIMIZEBOX = 0x00020000
+WS_MAXIMIZEBOX = 0x00010000
+SWP_FRAMECHANGED = 0x0020
+SWP_NOSIZE = 0x0001
+SWP_NOMOVE = 0x0002
+SW_MAXIMIZE = 3
+SW_RESTORE = 9
+WVR_REDRAW = 0x0301
+_NATIVE_STYLES = WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX
 
 
-def _dwm_api():
-    """DWM/GDI handles with correct 64-bit signatures (cached on the module)."""
-    if getattr(_dwm_api, "_cached", None) is not None:
-        return _dwm_api._cached
+class _RECT(ctypes.Structure):
+    _fields_ = [
+        ("left", ctypes.c_long),
+        ("top", ctypes.c_long),
+        ("right", ctypes.c_long),
+        ("bottom", ctypes.c_long),
+    ]
 
-    class _Dwm:
-        def __init__(self):
-            gdi32 = ctypes.windll.gdi32
-            dwmapi = ctypes.windll.dwmapi
 
-            gdi32.CreateCompatibleDC.restype = wintypes.HDC
-            gdi32.CreateDIBSection.restype = wintypes.HBITMAP
-            gdi32.CreateDIBSection.argtypes = [
-                wintypes.HDC, ctypes.c_void_p, wintypes.UINT,
-                ctypes.POINTER(ctypes.c_void_p), wintypes.HANDLE, wintypes.DWORD,
-            ]
-            gdi32.DeleteDC.restype = wintypes.BOOL
-            gdi32.DeleteObject.restype = wintypes.BOOL
+class _MONITORINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("rcMonitor", _RECT),
+        ("rcWork", _RECT),
+        ("dwFlags", wintypes.DWORD),
+    ]
 
-            dwmapi.DwmSetWindowAttribute.restype = ctypes.c_long
-            dwmapi.DwmSetWindowAttribute.argtypes = [
-                wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
-            ]
-            dwmapi.DwmSetIconicThumbnail.restype = ctypes.c_long
-            dwmapi.DwmSetIconicThumbnail.argtypes = [
-                wintypes.HWND, wintypes.HBITMAP, wintypes.DWORD,
-            ]
-            dwmapi.DwmSetIconicLivePreviewBitmap.restype = ctypes.c_long
-            dwmapi.DwmSetIconicLivePreviewBitmap.argtypes = [
-                wintypes.HWND, wintypes.HBITMAP, ctypes.c_void_p, wintypes.DWORD,
-            ]
-            self.gdi32 = gdi32
-            self.dwmapi = dwmapi
 
-    _dwm_api._cached = _Dwm()
-    return _dwm_api._cached
+class _NCCALCSIZE_PARAMS(ctypes.Structure):
+    _fields_ = [
+        ("rgrc0", _RECT),
+        ("rgrc1", _RECT),
+        ("rgrc2", _RECT),
+        ("lppos", ctypes.c_void_p),
+    ]
+
+
+def _declare_user32():
+    """Set exact 64-bit signatures so ctypes never truncates HWNDs/long ptrs."""
+    user32 = ctypes.windll.user32
+    user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+    user32.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.SetWindowLongPtrW.restype = ctypes.c_ssize_t
+    user32.SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+    user32.SetWindowPos.restype = wintypes.BOOL
+    user32.SetWindowPos.argtypes = [
+        wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+        ctypes.c_int, ctypes.c_int, wintypes.UINT,
+    ]
+    user32.IsZoomed.restype = wintypes.BOOL
+    user32.IsZoomed.argtypes = [wintypes.HWND]
+    user32.MonitorFromWindow.restype = wintypes.HANDLE
+    user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+    user32.GetMonitorInfoW.restype = wintypes.BOOL
+    user32.GetMonitorInfoW.argtypes = [wintypes.HWND, ctypes.POINTER(_MONITORINFO)]
+    user32.ShowWindow.restype = wintypes.BOOL
+    user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+    return user32
 from PySide6.QtWidgets import QSizePolicy
 
 try:  # QtCharts is optional; the stats chart degrades to a plain label if absent.
@@ -865,13 +888,12 @@ class MainWindow(QMainWindow):
         self._continue_icon_pending = {}  # cover-url -> QToolButton (continue strip)
         self._continue_icon_fetching = set()
         self._title_drag = None
-        # Animated minimize/restore state (see _animated_minimize/_animated_restore).
-        self._geom_anim = None
+        # Native minimize/restore/maximize animations (see _animated_minimize
+        # and _apply_native_window_styles): the caption frame bits are applied
+        # on first show so the DWM plays the real OS animations.
         self._fade_anim = None
-        self._normal_geometry = None
         self._closing_fade = False       # close button started the fade-out
-        self._native_animations = False  # DWM iconic thumbnails enabled
-        self._native_animations_enabled = False  # showEvent ran once
+        self._native_styles_applied = False  # showEvent ran the style patch once
         # Header elements hidden at narrow widths (see _update_header_for_width).
         self._header_hid_chips = False
         self._header_hid_sub = False
@@ -944,172 +966,80 @@ class MainWindow(QMainWindow):
         self.close()
 
     def _toggle_max(self):
-        """Animate the window expanding to full-screen or back to normal."""
-        if self.isMaximized():
-            end = self._normal_geometry or self.geometry()
-            self._run_geom_anim(
-                self.geometry(), end,
-                duration=300, easing=QEasingCurve.OutCubic, on_finish=self._finish_restore_max_anim,
-            )
-        else:
-            self._normal_geometry = self.geometry()
-            target = self.screen().availableGeometry()
-            self._run_geom_anim(
-                self.geometry(), target,
-                duration=300, easing=QEasingCurve.OutCubic, on_finish=self._finish_max_anim,
-            )
-
-    def _finish_max_anim(self):
-        self.showMaximized()
-        self._geom_anim = None
-
-    def _finish_restore_max_anim(self):
-        self.showNormal()
-        self._geom_anim = None
-
-    def _run_geom_anim(self, start, end, duration=260, easing=None, on_finish=None):
-        """Animate the window from *start* to *end* geometry (smooth + snappy)."""
-        anim = QPropertyAnimation(self, b"geometry", self)
-        anim.setDuration(duration)
-        anim.setStartValue(start)
-        anim.setEndValue(end)
-        anim.setEasingCurve(easing if easing is not None else QEasingCurve.InOutCubic)
-        if on_finish is not None:
-            anim.finished.connect(on_finish)
-        anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
-        self._geom_anim = anim  # keep a reference so GC can't kill it mid-flight
+        """Maximize/restore through the OS so the native Windows animation plays."""
+        try:
+            user32 = _declare_user32()
+            hwnd = int(self.winId())
+            if self.isMaximized():
+                user32.ShowWindow(hwnd, SW_RESTORE)
+            else:
+                user32.ShowWindow(hwnd, SW_MAXIMIZE)
+        except Exception:  # noqa: BLE001 - fall back to Qt's own maximize
+            if self.isMaximized():
+                self.showNormal()
+            else:
+                self.showMaximized()
 
     def _animated_minimize(self):
         """Minimize with the native Windows 11 fly-to-taskbar animation.
 
-        With the DWM iconic-thumbnail attributes enabled (see ``showEvent``),
-        Windows animates the window into the taskbar itself, exactly like any
-        other app on Windows 11 - no custom animation needed.
+        The caption frame bits re-added in ``_apply_native_window_styles`` make
+        the DWM animate this window into the taskbar exactly like every other
+        app on Windows 11 - no custom animation needed.
         """
         self.showMinimized()
 
     def _animated_restore(self):
         """Restore with the native Windows 11 fly-back animation."""
+        try:
+            user32 = _declare_user32()
+            hwnd = int(self.winId())
+            if self.isMinimized():
+                user32.ShowWindow(hwnd, SW_RESTORE)
+        except Exception:  # noqa: BLE001
+            pass
         self.show()
         self.raise_()
         self.activateWindow()
 
     # ------------------------------------------------------------ DWM native
-    def _enable_native_animations(self):
-        """Opt into Windows' own window animations for a frameless window."""
+    def _apply_native_window_styles(self):
+        """Re-add the caption frame bits so the DWM plays real OS animations."""
         try:
-            api = _dwm_api()
+            user32 = _declare_user32()
             hwnd = int(self.winId())
-            one = ctypes.c_int(1)
-            api.dwmapi.DwmSetWindowAttribute(
-                hwnd, DWMWA_HAS_ICONIC_BITMAP, ctypes.byref(one), ctypes.sizeof(one)
+            style = user32.GetWindowLongPtrW(hwnd, GWL_STYLE)
+            user32.SetWindowLongPtrW(hwnd, GWL_STYLE, style | _NATIVE_STYLES)
+            user32.SetWindowPos(
+                hwnd, None, 0, 0, 0, 0,
+                SWP_FRAMECHANGED | SWP_NOSIZE | SWP_NOMOVE,
             )
-            api.dwmapi.DwmSetWindowAttribute(
-                hwnd, DWMWA_FORCE_ICONIC_REPRESENTATION,
-                ctypes.byref(one), ctypes.sizeof(one),
-            )
-            self._native_animations = True
-        except Exception:  # noqa: BLE001 - non-DWM systems just get plain minimize
-            self._native_animations = False
-
-    def _grab_to_hbitmap(self, pixmap):
-        """Convert a QPixmap into an HBITMAP the DWM can display."""
-        try:
-            api = _dwm_api()
-            img = pixmap.toImage().convertToFormat(QImage.Format_ARGB32_Premultiplied)
-            w, h = img.width(), img.height()
-            if w <= 0 or h <= 0:
-                return None
-
-            class BITMAPINFOHEADER(ctypes.Structure):
-                _fields_ = [
-                    ("biSize", wintypes.DWORD),
-                    ("biWidth", wintypes.LONG),
-                    ("biHeight", wintypes.LONG),
-                    ("biPlanes", wintypes.WORD),
-                    ("biBitCount", wintypes.WORD),
-                    ("biCompression", wintypes.DWORD),
-                    ("biSizeImage", wintypes.DWORD),
-                    ("biXPelsPerMeter", wintypes.LONG),
-                    ("biYPelsPerMeter", wintypes.LONG),
-                    ("biClrUsed", wintypes.DWORD),
-                    ("biClrImportant", wintypes.DWORD),
-                ]
-
-            bih = BITMAPINFOHEADER()
-            bih.biSize = ctypes.sizeof(BITMAPINFOHEADER)
-            bih.biWidth = w
-            bih.biHeight = -h  # top-down rows match QImage
-            bih.biPlanes = 1
-            bih.biBitCount = 32
-
-            hdc = api.gdi32.CreateCompatibleDC(None)
-            bits = ctypes.c_void_p()
-            hbmp = api.gdi32.CreateDIBSection(
-                hdc, ctypes.byref(bih), 0, ctypes.byref(bits), None, 0
-            )
-            api.gdi32.DeleteDC(hdc)
-            if not hbmp or not bits:
-                return None
-            src = img.constBits()
-            try:
-                src_addr = int(src)
-            except (TypeError, ValueError):
-                src_addr = None
-            if src_addr:
-                ctypes.memmove(bits, src_addr, w * h * 4)
-            else:
-                ctypes.memmove(bits, bytes(src), w * h * 4)
-            return hbmp
-        except Exception:  # noqa: BLE001 - never break the UI for a thumbnail
-            return None
-
-    def _dwm_send_thumbnail(self, pixmap):
-        hbmp = self._grab_to_hbitmap(pixmap)
-        if not hbmp:
-            return
-        try:
-            _dwm_api().dwmapi.DwmSetIconicThumbnail(int(self.winId()), hbmp, 0)
-        finally:
-            _dwm_api().gdi32.DeleteObject(hbmp)
-
-    def _dwm_send_preview(self, pixmap):
-        hbmp = self._grab_to_hbitmap(pixmap)
-        if not hbmp:
-            return
-        try:
-            _dwm_api().dwmapi.DwmSetIconicLivePreviewBitmap(
-                int(self.winId()), hbmp, None, 0
-            )
-        finally:
-            _dwm_api().gdi32.DeleteObject(hbmp)
+        except Exception:  # noqa: BLE001 - non-Windows keeps the plain frameless window
+            pass
 
     def nativeEvent(self, eventType, message):  # noqa: N802 (Qt naming)
-        """Serve DWM the window snapshots it needs for native animations."""
-        if not getattr(self, "_native_animations", False) or self.isMinimized():
-            return super().nativeEvent(eventType, message)
+        """Hide the OS caption and keep the maximized client in the work area."""
         try:
             msg = wintypes.MSG.from_address(int(message))
         except Exception:  # noqa: BLE001
             return super().nativeEvent(eventType, message)
-        if msg.message == WM_DWMSENDICONICTHUMBNAIL:
-            max_w = msg.lParam & 0xFFFF
-            max_h = (msg.lParam >> 16) & 0xFFFF
-            grab = self.grab()
-            if max_w and max_h:
-                grab = grab.scaled(max_w, max_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            self._dwm_send_thumbnail(grab)
-            return True, 0
-        if msg.message == WM_DWMSENDICONICLIVEPREVIEWBITMAP:
-            self._dwm_send_preview(self.grab())
-            return True, 0
+        if msg.message == WM_NCCALCSIZE:
+            try:
+                user32 = _declare_user32()
+                if user32.IsZoomed(int(msg.hWnd)):
+                    params = _NCCALCSIZE_PARAMS.from_address(int(msg.lParam))
+                    monitor = _MONITORINFO()
+                    monitor.cbSize = ctypes.sizeof(_MONITORINFO)
+                    user32.GetMonitorInfoW(
+                        user32.MonitorFromWindow(int(msg.hWnd), 2),
+                        ctypes.byref(monitor),
+                    )
+                    params.rgrc0 = monitor.rcWork
+                    return True, WVR_REDRAW if msg.wParam else 0
+                return False, 0
+            except Exception:  # noqa: BLE001 - never break the native event chain
+                return False, 0
         return super().nativeEvent(eventType, message)
-
-    def showEvent(self, event):  # noqa: N802 (Qt naming)
-        if not getattr(self, "_native_animations_enabled", False):
-            self._native_animations_enabled = True
-            self._enable_native_animations()
-        super().showEvent(event)
 
     def changeEvent(self, event):  # noqa: N802 (Qt naming)
         from PySide6.QtCore import QEvent
@@ -4489,9 +4419,15 @@ class MainWindow(QMainWindow):
             pass
 
     def showEvent(self, event):  # noqa: N802 (Qt naming)
+        if not getattr(self, "_native_styles_applied", False):
+            self._native_styles_applied = True
+            self._apply_native_window_styles()
         if self._start_maximized:
             self._start_maximized = False
-            self.showMaximized()
+            try:
+                _declare_user32().ShowWindow(int(self.winId()), SW_MAXIMIZE)
+            except Exception:  # noqa: BLE001
+                self.showMaximized()
         self.setWindowOpacity(1.0)
         self._apply_backdrop()
         super().showEvent(event)
