@@ -37,7 +37,7 @@ from ..browser.detectors import DetectorRegistry, PageContext, VideoState
 from ..browser.extension import ExtensionBridge, ensure_token
 from ..core.recent import RecentHistory
 from ..core.watchlog import WatchLog, format_hours, watchlog_path_for
-from ..discord.rpc import DiscordClient, format_seconds
+from ..discord.rpc import DiscordClient
 from ..discord.vencord import VencordBridge
 from ..ui.bridge import QtLogHandler
 
@@ -612,9 +612,8 @@ class Controller:
         title = manual.get("title") or "Anime"
         episode = manual.get("episode") or ""
         ep = f"Episode {episode}" if episode else ""
-        website = manual.get("website") or "Watching"
         details = f"Watching: {title}"[:128]
-        state = (" · ".join(part for part in (ep, f"on {website}") if part) or "Watching")[:128]
+        state = (ep or "Watching")[:128]
         buttons = []
         if manual.get("url"):
             buttons.append({"label": "Watch Anime", "url": manual["url"]})
@@ -1343,13 +1342,6 @@ class Controller:
         title = (media.display_title() if media else None) or detection.cleaned_title or detection.raw_title
         episode = format_episode_progress(detection.episode, media.episodes if media else None)
 
-        # Discord has no visible "small text" line, and favicon URLs have no file
-        # extension (which makes Discord's asset validation reject the activity),
-        # so playback progress is shown inline in the state instead.
-        progress = ""
-        if not video.paused and video.duration > 0:
-            progress = f"{format_seconds(video.current_time)} / {format_seconds(video.duration)}"
-
         airing = ""
         if media and media.next_airing_at and not video.paused:
             airing = next_airing_label(
@@ -1360,10 +1352,8 @@ class Controller:
         if video.paused:
             state = ("Paused · " + episode) if episode else "Paused"
         else:
-            state = " · ".join(
-                part for part in (episode, airing, progress, f"on {detection.website}")
-                if part
-            )
+            # Discord's native progress bar already shows the playback time.
+            state = " · ".join(part for part in (episode, airing) if part) or "Watching"
         state = state[:128]
 
         # Prefer the biggest cover AniList offers; the URL must carry a file
