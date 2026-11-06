@@ -2269,6 +2269,53 @@ class MainWindow(QMainWindow):
         ttl_row.addWidget(self.ttl_spin)
         mm.addLayout(ttl_row)
 
+        sync_row = QHBoxLayout()
+        self.anilist_sync_check = QCheckBox("Keep AniList in sync (two-way)")
+        self.anilist_sync_check.setChecked(self.cfg.data.anilist_sync_enabled)
+        self.anilist_sync_check.setToolTip(
+            "Pull your AniList list into AniPresence and push episodes that "
+            "reach 90% playback. An access token lets the pull include private "
+            "profiles and the account that owns the token."
+        )
+        sync_row.addWidget(self.anilist_sync_check, 1)
+        self.anilist_sync_now_btn = QPushButton("Sync now")
+        self.anilist_sync_now_btn.setToolTip(
+            "Fetch the latest list from AniList now. Progress updates for "
+            "watched episodes are pushed automatically."
+        )
+        sync_row.addWidget(self.anilist_sync_now_btn)
+        mm.addLayout(sync_row)
+
+        token_row = QHBoxLayout()
+        token_label = QLabel("AniList access token")
+        token_label.setObjectName("sectionLabel")
+        token_row.addWidget(token_label, 1)
+        self.anilist_token_edit = QLineEdit()
+        self.anilist_token_edit.setEchoMode(QLineEdit.Password)
+        self.anilist_token_edit.setPlaceholderText("Required for sync mutations")
+        self.anilist_token_edit.setText(self.cfg.data.anilist_access_token)
+        self.anilist_token_edit.setToolTip(
+            "OAuth access token for an AniList account. It is stored in your local config."
+        )
+        token_row.addWidget(self.anilist_token_edit, 1)
+        mm.addLayout(token_row)
+
+        sync_hint = QLabel(
+            "Two-way sync reads the token owner's AniList list (public or "
+            "private) into the Library and Stats, and advances their episode "
+            "progress at 90% playback. Without a token, the username selector "
+            "still controls public-list imports; the sync destination is always "
+            "the token's account."
+        )
+        sync_hint.setObjectName("subLabel")
+        sync_hint.setWordWrap(True)
+        mm.addWidget(sync_hint)
+
+        self.anilist_sync_status = QLabel("")
+        self.anilist_sync_status.setObjectName("subLabel")
+        self.anilist_sync_status.setWordWrap(True)
+        mm.addWidget(self.anilist_sync_status)
+
         port_row = QHBoxLayout()
         port_label = QLabel("Chrome debugging port")
         port_label.setObjectName("sectionLabel")
@@ -2351,6 +2398,14 @@ class MainWindow(QMainWindow):
 
     def _on_ttl_changed(self, value):
         self.cfg.set(anilist_cache_ttl_days=value)
+
+    def _on_anilist_sync_changed(self, enabled):
+        self.cfg.set(anilist_sync_enabled=enabled)
+
+    def _on_anilist_token_changed(self):
+        token = self.anilist_token_edit.text().strip()
+        self.cfg.set(anilist_access_token=token)
+        self.controller.anilist.set_access_token(token)
 
     def _on_port_changed(self, value):
         self.cfg.set(chrome_debugging_port=value)
@@ -2445,6 +2500,26 @@ class MainWindow(QMainWindow):
         self._refresh_continue()
         if message:
             self._notify("AniPresence", message)
+
+    def _on_anilist_sync_now(self):
+        self.anilist_sync_now_btn.setEnabled(False)
+        self.anilist_sync_now_btn.setText("Syncing…")
+        self.anilist_sync_status.setText("Contacting AniList…")
+        self.controller.sync_anilist()
+
+    def _on_anilist_synced(self, payload):
+        self.anilist_sync_now_btn.setEnabled(True)
+        self.anilist_sync_now_btn.setText("Sync now")
+        payload = payload or {}
+        message = payload.get("message") or ""
+        account = payload.get("account") or ""
+        titles = payload.get("titles") or 0
+        if message:
+            self.anilist_sync_status.setText(message)
+        elif account:
+            self.anilist_sync_status.setText(f"Synced {titles} titles from {account}.")
+        else:
+            self.anilist_sync_status.setText("Synced.")
 
     def _resume_stats_item(self, item):
         url = item.data(Qt.UserRole) or ""
@@ -2831,6 +2906,7 @@ class MainWindow(QMainWindow):
         self.bridge.stats_imported.connect(self._on_stats_imported)
         self.bridge.account_avatar.connect(self._on_account_avatar)
         self.bridge.library_loaded.connect(self._on_library_loaded)
+        self.bridge.anilist_synced.connect(self._on_anilist_synced)
         self.bridge.calendar_loaded.connect(self._on_calendar_loaded)
         self.bridge.share_tunnel.connect(self._on_tunnel_public_url)
         self.bridge.match_pending.connect(self._on_match_pending)
@@ -2851,6 +2927,9 @@ class MainWindow(QMainWindow):
         self.anilist_combo.currentIndexChanged.connect(self._on_anilist_account_switch)
         self.interval_spin.valueChanged.connect(self._on_interval_changed)
         self.app_id_edit.editingFinished.connect(self._on_app_id_changed)
+        self.anilist_sync_check.toggled.connect(self._on_anilist_sync_changed)
+        self.anilist_sync_now_btn.clicked.connect(self._on_anilist_sync_now)
+        self.anilist_token_edit.editingFinished.connect(self._on_anilist_token_changed)
         self.broadcast_combo.currentIndexChanged.connect(self._on_broadcast_changed)
         self.browser_combo.currentIndexChanged.connect(self._on_browser_changed)
         self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
@@ -2920,6 +2999,9 @@ class MainWindow(QMainWindow):
             self.match_spin.setValue(int(self.cfg.data.min_match_score))
         with QSignalBlocker(self.ttl_spin):
             self.ttl_spin.setValue(int(self.cfg.data.anilist_cache_ttl_days))
+        with QSignalBlocker(self.anilist_sync_check):
+            self.anilist_sync_check.setChecked(self.cfg.data.anilist_sync_enabled)
+        self.anilist_token_edit.setText(self.cfg.data.anilist_access_token)
         with QSignalBlocker(self.port_spin):
             self.port_spin.setValue(int(self.cfg.data.chrome_debugging_port))
         load(self.paused_check, self.cfg.data.show_paused_presence)

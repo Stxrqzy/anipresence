@@ -89,6 +89,35 @@ query ($name: String) {
 }
 """
 
+# Authenticated user list: uses the bearer token so it works for private
+# profiles and reflects the token owner's own lists (the two-way sync pull side).
+_VIEWER_LIST_QUERY = """
+query ($userId: Int) {
+  MediaListCollection(userId: $userId, type: ANIME) {
+    lists {
+      entries {
+        status
+        progress
+        media {
+          id
+          title { romaji english native }
+          coverImage { extraLarge large }
+          siteUrl
+          episodes
+          season
+          seasonYear
+          nextAiringEpisode { airingAt episode }
+          meanScore
+          isAdult
+          genres
+          tags { name isAdult }
+        }
+      }
+    }
+  }
+}
+"""
+
 # Avatar lookup for the account indicator in the UI (public User profile).
 _USER_QUERY = """
 query ($name: String) {
@@ -235,15 +264,24 @@ class Media:
 class AniListClient:
     """Thin, retrying GraphQL client for AniList."""
 
-    def __init__(self, timeout=12):
+    def __init__(self, timeout=12, access_token=""):
         self._timeout = timeout
+        self._access_token = (access_token or "").strip()
         self._session = requests.Session()
 
-    def _query(self, query, variables):
+    def set_access_token(self, access_token):
+        """Replace the bearer token used by authenticated mutations."""
+        self._access_token = (access_token or "").strip()
+
+    def _query(self, query, variables, _retry=True):
         try:
+            headers = {}
+            if self._access_token:
+                headers["Authorization"] = f"Bearer {self._access_token}"
             resp = self._session.post(
                 ANILIST_ENDPOINT,
                 json={"query": query, "variables": variables},
+                headers=headers,
                 timeout=self._timeout,
             )
             payload = resp.json()
@@ -254,11 +292,11 @@ class AniListClient:
             errs = payload["errors"]
             msg = errs[0].get("message", "unknown AniList error")
             # AniList enforces a ~90 req/min limit; one polite retry with backoff.
-            if "rate" in msg.lower() or resp.status_code == 429:
+            if _retry and ("rate" in msg.lower() or resp.status_code == 429):
                 logger.info("AniList rate limit hit, retrying in 3s")
                 import time
                 time.sleep(3)
-                return self._query(query, variables)
+                return self._query(query, variables, _retry=False)
             raise AniListError(msg)
 
         return payload.get("data", {})
@@ -276,15 +314,9 @@ class AniListClient:
         raw = data.get("Media")
         return Media.from_dict(raw) if raw else None
 
-    def fetch_user_list(self, username):
-        """Fetch a public user's anime list for stats backfill / section tabs.
-
-        Returns a list of dicts:
-            {"media": Media, "status": str, "progress": int}
-        Every standard list membership (current/repeating/planning/completed/
-        paused/dropped) is included so the caller can group by status.
-        """
-        data = self._query(_USER_LIST_QUERY, {"name": username})
+    @staticmethod
+    def _parse_list_collection(data):
+        """Flatten a ``MediaListCollection`` payload into ``{media, status, progress}``."""
         lists = (data.get("MediaListCollection") or {}).get("lists") or []
         results = []
         for group in lists:
@@ -298,6 +330,86 @@ class AniListClient:
                     }
                 )
         return results
+
+    def fetch_user_list(self, username):
+        """Fetch a public user's anime list for stats backfill / section tabs.
+
+        Returns a list of dicts:
+            {"media": Media, "status": str, "progress": int}
+        Every standard list membership (current/repeating/planning/completed/
+        paused/dropped) is included so the caller can group by status.
+        """
+        data = self._query(_USER_LIST_QUERY, {"name": username})
+        return self._parse_list_collection(data)
+
+    def fetch_viewer_list(self):
+        """Fetch the authenticated viewer's own list (token required).
+
+        Unlike :meth:`fetch_user_list`, this works for private profiles and
+        reflects the token owner's current AniList state - the pull half of the
+        two-way sync. Returns ``(entries, viewer_name)`` where *entries* has the
+        same shape as :meth:`fetch_user_list`.
+        """
+        if not self._access_token:
+            raise AniListError("AniList access token is not configured")
+        viewer = (self._query("query { Viewer { id name } }", {}) or {}).get("Viewer") or {}
+        user_id = viewer.get("id")
+        if not user_id:
+            raise AniListError("AniList token did not authenticate an account")
+        data = self._query(_VIEWER_LIST_QUERY, {"userId": int(user_id)})
+        return self._parse_list_collection(data), (viewer.get("name") or "")
+
+    def sync_progress(self, media_id, episode, total_episodes=None):
+        """Advance an authenticated user's AniList progress without regressing it.
+
+        Returns ``True`` when the list was updated and ``False`` when it was
+        already at least this far along. Raises :class:`AniListError` when the
+        token is missing or AniList rejects the mutation.
+        """
+        if not self._access_token:
+            raise AniListError("AniList access token is not configured")
+        media_id = int(media_id)
+        episode = int(episode)
+        if episode <= 0:
+            return False
+
+        data = self._query(
+            """
+            query ($mediaId: Int) {
+              Viewer { id }
+              Media(id: $mediaId, type: ANIME) {
+                episodes
+                mediaListEntry { progress status }
+              }
+            }
+            """,
+            {"mediaId": media_id},
+        )
+        if not (data.get("Viewer") or {}).get("id"):
+            raise AniListError("AniList token did not authenticate an account")
+        media = data.get("Media")
+        if not media:
+            raise AniListError("Anime not found on AniList")
+        total_episodes = media.get("episodes") or total_episodes
+        if total_episodes and episode > int(total_episodes):
+            raise AniListError("Detected episode exceeds the AniList episode count")
+        current = media.get("mediaListEntry") or {}
+        if int(current.get("progress") or 0) >= episode:
+            return False
+
+        status = "COMPLETED" if total_episodes and episode >= int(total_episodes) else "CURRENT"
+        self._query(
+            """
+            mutation ($mediaId: Int, $progress: Int, $status: MediaListStatus) {
+              SaveMediaListEntry(mediaId: $mediaId, progress: $progress, status: $status) {
+                progress
+                status
+              }
+            }
+            """,
+            {"mediaId": media_id, "progress": episode, "status": status},
+        )
+        return True
 
     def fetch_seasonal(self, season, year, per_page=50):
         """Fetch the top anime for a given season (e.g. ("SUMMER", 2026)).

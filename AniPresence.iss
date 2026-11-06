@@ -51,7 +51,7 @@ Name: "runapp"; Description: "&Launch {#MyAppName} after finishing"; GroupDescri
 [Files]
 Source: "dist\AniPresence\AniPresence.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "dist\AniPresence\_internal\*"; DestDir: "{app}\_internal"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "browser-extension\*"; DestDir: "{app}\extension"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "browser-extension\*"; DestDir: "{app}\extension"; Excludes: "settings.json"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

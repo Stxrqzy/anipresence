@@ -1,7 +1,7 @@
 """AniList client helpers: Media normalization and adult-content detection."""
 import pytest
 
-from src.anime.anilist import AniListClient, Media
+from src.anime.anilist import AniListClient, AniListError, Media
 
 
 def _media(**kw):
@@ -150,3 +150,114 @@ def test_fetch_user_profile_no_avatar(monkeypatch):
     client = AniListClient()
     monkeypatch.setattr(client, "_query", fake_query)
     assert client.fetch_user_profile("Bob") == ""
+
+
+def test_parse_list_collection_shape():
+    parsed = AniListClient._parse_list_collection(
+        {
+            "MediaListCollection": {
+                "lists": [
+                    {
+                        "entries": [
+                            {
+                                "status": "COMPLETED",
+                                "progress": 12,
+                                "media": {"id": 3, "title": {"romaji": "X"}},
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+    )
+    assert parsed[0]["progress"] == 12
+    assert parsed[0]["status"] == "COMPLETED"
+    assert parsed[0]["media"].id == 3
+
+
+def test_fetch_viewer_list_requires_token():
+    client = AniListClient()
+    with pytest.raises(AniListError):
+        client.fetch_viewer_list()
+
+
+def test_fetch_viewer_list_parses_collection(monkeypatch):
+    def fake_query(query, variables):
+        if "Viewer" in query:
+            return {"Viewer": {"id": 7, "name": "Alice"}}
+        assert variables == {"userId": 7}
+        return {
+            "MediaListCollection": {
+                "lists": [
+                    {
+                        "entries": [
+                            {
+                                "status": "CURRENT",
+                                "progress": 4,
+                                "media": {"id": 1, "title": {"romaji": "Show"}, "episodes": 12},
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+
+    client = AniListClient(access_token="tok")
+    monkeypatch.setattr(client, "_query", fake_query)
+    entries, name = client.fetch_viewer_list()
+    assert name == "Alice"
+    assert entries[0]["status"] == "CURRENT"
+    assert entries[0]["progress"] == 4
+    assert entries[0]["media"].id == 1
+
+
+def test_sync_progress_does_not_regress_existing_entry(monkeypatch):
+    calls = []
+
+    def fake_query(query, variables):
+        calls.append((query, variables))
+        if query.lstrip().startswith("query"):
+            return {"Viewer": {"id": 1}, "Media": {
+                "mediaListEntry": {"progress": 7, "status": "CURRENT"}}}
+        raise AssertionError("a lower progress must not be submitted")
+
+    client = AniListClient(access_token="token")
+    monkeypatch.setattr(client, "_query", fake_query)
+    assert client.sync_progress(42, 5, 12) is False
+    assert len(calls) == 1
+
+
+def test_sync_progress_saves_and_completes(monkeypatch):
+    calls = []
+
+    def fake_query(query, variables):
+        calls.append((query, variables))
+        if query.lstrip().startswith("query"):
+            return {"Viewer": {"id": 1}, "Media": {
+                "mediaListEntry": {"progress": 2, "status": "CURRENT"}}}
+        return {"SaveMediaListEntry": {"progress": 3, "status": "COMPLETED"}}
+
+    client = AniListClient(access_token="token")
+    monkeypatch.setattr(client, "_query", fake_query)
+    assert client.sync_progress(42, 3, 3) is True
+    assert calls[1][1] == {"mediaId": 42, "progress": 3, "status": "COMPLETED"}
+
+
+def test_sync_new_entry_authenticated_lookup(monkeypatch):
+    requests = []
+
+    def post(url, **kwargs):
+        requests.append(kwargs)
+        query = kwargs["json"]["query"]
+        if "Viewer" in query:
+            assert "mediaListEntry" in query
+            data = {"Viewer": {"id": 1}, "Media": {"episodes": 12, "mediaListEntry": None}}
+        else:
+            data = {"SaveMediaListEntry": {"progress": 1, "status": "CURRENT"}}
+        return type("Response", (), {"status_code": 200, "json": lambda self: {"data": data}})()
+
+    client = AniListClient(access_token="test-token")
+    monkeypatch.setattr(client._session, "post", post)
+    assert client.sync_progress(42, 1)
+    assert all(r["headers"]["Authorization"] == "Bearer test-token" for r in requests)
+    assert requests[-1]["json"]["variables"]["status"] == "CURRENT"

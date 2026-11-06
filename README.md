@@ -17,10 +17,18 @@ from the page title.
   Works even for cross-origin iframe players (GoGoAnime, AnimePahe, AniWave…)
   by attaching to each iframe's own DevTools target.
 - **Supported sites** — Crunchyroll, Netflix, Hulu, HIDIVE, AniWave/9anime,
-  GoGoAnime mirrors, AnimePahe, HiAnime/AniWatch/Zoro, Bilibili, plus a generic
-  extractor for Prime Video, Disney+, WcoFun, KissAnime and friends.
+  GoGoAnime mirrors, AnimePahe, HiAnime/AniWatch/Zoro, Miruro, ani.pm, Bilibili,
+  plus a generic extractor for Prime Video, Disney+, WcoFun, KissAnime and
+  friends.
+- **ani.pm episodes** — reads the active episode from the player heading or
+  selected playlist entry, including opaque `?ep=` links and episode switches
+  without a page reload. After upgrading, reload AniPresence Bridge in your
+  browser's extensions page and refresh the ani.pm tab to load the updated reader.
 - **AniList identification** — fuzzy matching with multi-term search fallback
   and a disk cache (default 7-day TTL) to avoid hammering the API.
+- **Two-way AniList sync** — pulls your AniList list into the Library and Stats
+  (the token makes this work for private profiles too) and pushes episode
+  progress after an episode reaches 90% playback; progress is never lowered.
 - **Account indicator** — the active AniList account shows its profile picture
   next to the account selector, so you always know whose watch history/stats
   you're looking at.
@@ -366,6 +374,9 @@ defaults). All keys:
 | `browser` | `"chrome"` | Browser to detect/launch: `chrome`, `brave`, `edge`, or `opera` |
 | `chrome_path` | `""` | Explicit path to the browser exe if auto-detect fails |
 | `anilist_cache_ttl_days` | `7` | How long AniList results are cached |
+| `anilist_username` | `""` | Public AniList username used for account lists and stats imports |
+| `anilist_sync_enabled` | `false` | Two-way AniList sync: pull your list and push progress after an episode is substantially watched |
+| `anilist_access_token` | `""` | OAuth bearer token for the sync account (enables private-list reads and progress updates) |
 | `show_paused_presence` | `true` | Show a "Paused" presence instead of hiding it |
 | `rpc_enabled` | `true` | Master switch for Discord Rich Presence |
 | `rpc_broadcast` | `"discord"` | Where to announce activity: `"discord"` (RPC pipe), `"vencord"` (Vencord plugin bridge), or `"both"` |
@@ -388,6 +399,25 @@ defaults). All keys:
 | `extension_token` | `""` | Bridge token (auto-generated on first run; set it in the extension options) |
 
 Logs: `%APPDATA%\AniPresence\logs\anipresence.log`.
+
+### Two-way AniList sync
+
+Add your AniList username in Settings, obtain an AniList OAuth access token for
+your account, paste it into **AniList access token**, and enable **Keep AniList
+in sync (two-way)**. Sync then runs in both directions:
+
+- **Pull (AniList → app).** Your list is read into the Library and Stats tabs on
+  every launch and whenever you press **Sync now**. With a token the read uses
+  the authenticated viewer's own list, so it works for private profiles and
+  reflects changes you make on AniList; without a token it falls back to the
+  active account's public username list.
+- **Push (app → AniList).** After an episode reaches 90% playback, AniPresence
+  advances the token owner's progress (and marks the entry *Completed* on the
+  final episode). Progress is never lowered, and failures retry automatically.
+
+The token belongs to the account that receives updates; the username selector
+only controls the public fallback. The token is stored locally in `config.json`;
+do not share it.
 
 ---
 

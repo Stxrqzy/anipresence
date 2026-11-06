@@ -57,6 +57,8 @@ class Config:
     extension_token: str = ""
     anilist_username: str = ""
     anilist_accounts: list = field(default_factory=list)
+    anilist_sync_enabled: bool = False
+    anilist_access_token: str = ""
     custom_sites: list = field(default_factory=list)   # [{"name": str, "host": str}]
     hide_adult_content: bool = True
     update_feed_url: str = ""

@@ -49,10 +49,29 @@ logger = logging.getLogger("anipresence.controller")
 MISS_TTL = 300.0
 
 # JS evaluated in every page target: real video state + page metadata.
-PAGE_INFO_JS = """(() => {
+PAGE_INFO_JS = r"""(() => {
   const v = document.querySelector('video');
+  // Keep this reader in sync with browser-extension/content.js.
+  function readAniPmEpisode() {
+    if (!/(^|\.)ani\.pm$/i.test(location.hostname)) return null;
+    const ordinal = document.querySelector('.ytw-title__n');
+    const heading = document.querySelector('h1.ytw-title');
+    const current = document.querySelector(
+      '[data-episode-number].is-current, [data-episode-number][aria-current="true"], ' +
+      '[data-episode-number]:has([aria-current="true"])'
+    );
+    // The heading remains mounted even when the playlist is filtered/virtualized.
+    const text = ordinal ? ordinal.textContent.trim().replace(/\.$/, '') : '';
+    const match = heading && heading.textContent.match(/^Episode\s+(\d{1,4})\b/i);
+    const raw = text || (match && match[1]) ||
+      (current && current.getAttribute('data-episode-number'));
+    if (!/^\d{1,4}$/.test(raw || '')) return null;
+    const episode = Number(raw);
+    return episode > 0 ? episode : null;
+  }
   return {
     title: document.title || '',
+    episode: readAniPmEpisode(),
     visibility: document.visibilityState || '',
     focused: document.hasFocus ? document.hasFocus() : false,
     video: v ? {
@@ -114,7 +133,7 @@ class Controller:
             browser=cfg.data.browser,
         )
         self.registry = DetectorRegistry(custom_sites=cfg.data.custom_sites)
-        self.anilist = AniListClient()
+        self.anilist = AniListClient(access_token=cfg.data.anilist_access_token)
         self.cache = AniCache(ttl_days=cfg.data.anilist_cache_ttl_days, path=APP_DIR / "anilist_cache.json")
         self.discord = DiscordClient()
         self.vencord = VencordBridge()
@@ -156,6 +175,10 @@ class Controller:
         self._watch_accum = {}                     # key -> seconds since last flush
         self._watch_progress = {}                  # key -> last video.current_time
         self._watch_meta = {}                      # key -> (title, episode, website, url, cover)
+        self._anilist_sync_inflight = set()
+        self._anilist_synced = set()
+        self._anilist_sync_retry = {}
+        self._anilist_sync_lock = threading.Lock()
         self._last_recent_emit = 0.0
 
     def set_custom_sites(self, sites):
@@ -200,12 +223,14 @@ class Controller:
                 self.bridge.log.emit(
                     f"Browser-extension bridge could not open port {self.extension.port}."
                 )
-        # Keep the Stats tab in sync with the user's public AniList list on
-        # every launch (idempotent: re-import replaces, never double-adds).
+        # Keep the Stats tab and Library in sync with the user's AniList list on
+        # every launch (idempotent: re-syncing replaces, never double-adds). With
+        # a token set this pulls the authenticated account's own (possibly
+        # private) list; otherwise it falls back to the public username.
         username = self._active_account or (self.cfg.data.anilist_username or "").strip()
-        if username:
-            self.bridge.log.emit(f"Syncing AniList watch list for {username}…")
-            self.import_anilist_history(username)
+        if username or (self.cfg.data.anilist_access_token or "").strip():
+            self.bridge.log.emit("Syncing AniList list (two-way)…")
+            self.sync_anilist(username)
         while not self.stop_event.is_set():
             try:
                 self._tick()
@@ -348,6 +373,7 @@ class Controller:
                     _ExtTarget(str(tab_key), payload.get("url") or ""),
                     {
                         "title": payload.get("title") or "",
+                        "episode": payload.get("episode"),
                         "visibility": payload.get("visibility") or "visible",
                         "focused": bool(payload.get("focused", True)),
                     },
@@ -542,6 +568,7 @@ class Controller:
             url=url,
             document_title=candidate.info.get("title") or candidate.target.title,
             next_data=next_data,
+            episode=candidate.info.get("episode"),
         )
 
     # -------------------------------------------------------------- no video
@@ -640,6 +667,66 @@ class Controller:
                 self._watch_accum[current.key] = self._watch_accum.get(current.key, 0) + delta
                 self._flush_watch(current.key)
         self._watch_progress[current.key] = now
+
+    @staticmethod
+    def _episode_complete(video):
+        """Sync only when a finite video has reached at least 90% playback."""
+        import math
+        if (video is None or not video.has_video or video.duration <= 0
+                or not math.isfinite(video.duration) or not math.isfinite(video.current_time)):
+            return False
+        return video.current_time >= video.duration * 0.9
+
+    def _maybe_sync_anilist(self, session, video):
+        """Advance AniList once per episode after playback is confidently complete."""
+        if not self.cfg.data.anilist_sync_enabled or not self.cfg.data.anilist_access_token:
+            return
+        if self._manual or not self.cfg.data.detection_enabled:
+            return
+        if session.media is None or not self._episode_complete(video):
+            return
+        try:
+            episode = int(session.detection.episode)
+        except (TypeError, ValueError):
+            return
+        if episode <= 0:
+            return
+        import hashlib
+        token = self.cfg.data.anilist_access_token.strip()
+        sync_key = (hashlib.sha256(token.encode()).hexdigest(), session.media.id, episode)
+        if sync_key in self._anilist_synced or sync_key in self._anilist_sync_inflight:
+            return
+        if time.monotonic() < self._anilist_sync_retry.get(sync_key, 0):
+            return
+        self._anilist_sync_inflight.add(sync_key)
+        media_id = session.media.id
+        total = session.media.episodes
+
+        def _run():
+            try:
+                # Serialize read/update pairs and retain the token captured for
+                # this episode even if Settings changes while work is queued.
+                with self._anilist_sync_lock:
+                    if not self.cfg.data.anilist_sync_enabled or self.stop_event.is_set():
+                        return
+                    client = AniListClient(access_token=token)
+                    try:
+                        updated = client.sync_progress(media_id, episode, total)
+                    finally:
+                        client._session.close()
+                if updated:
+                    self.bridge.log.emit(
+                        f"AniList progress updated: {session.media.display_title()} "
+                        f"episode {episode}."
+                    )
+                self._anilist_synced.add(sync_key)
+            except Exception as exc:  # noqa: BLE001 - syncing must never stop detection
+                self._anilist_sync_retry[sync_key] = time.monotonic() + 60
+                self.bridge.log.emit(f"AniList sync failed for episode {episode}: {exc}")
+            finally:
+                self._anilist_sync_inflight.discard(sync_key)
+
+        threading.Thread(target=_run, daemon=True).start()
 
     def _flush_watch(self, key):
         secs = self._watch_accum.pop(key, 0)
@@ -776,6 +863,7 @@ class Controller:
             logger.info("New session: %s", key)
 
         self._current = CurrentSession(detection, media, confidence, session_start, key)
+        self._maybe_sync_anilist(self._current, detection.video)
         self._watch_meta[key] = (
             detection.cleaned_title or detection.raw_title,
             detection.episode,
@@ -911,29 +999,51 @@ class Controller:
 
         threading.Thread(target=_run, daemon=True).start()
 
-    def import_anilist_history(self, username=None):
-        """Backfill the stats dashboard from a user's public AniList list.
+    def sync_anilist(self, username=None):
+        """Two-way AniList sync: pull the list here, push progress live.
 
-        Runs in a background thread (network I/O). Each anime with progress is
-        credited with ``episodes_watched * 24 min`` of watch time; imported time
-        feeds the per-title totals but not the daily chart/streak.
+        With an access token set, the *pull* reads the authenticated viewer's
+        own list (works for private profiles and reflects edits made on
+        AniList); without a token it falls back to the active account's public
+        list. Imported progress is reconciled into the local watch log
+        (idempotent: re-syncing replaces the previous import) and the Library
+        tab is refreshed. The *push* half advances AniList progress at 90%
+        playback and runs automatically as episodes complete (see
+        :meth:`_maybe_sync_anilist`). Runs in a background thread (network I/O).
         """
         import threading
 
-        username = username or self._active_account or (self.cfg.data.anilist_username or "").strip()
-        if not username:
-            self.bridge.stats_imported.emit(0, "No AniList username set.")
+        token = (self.cfg.data.anilist_access_token or "").strip()
+        account = (username or self._active_account
+                   or (self.cfg.data.anilist_username or "").strip())
+        if not token and not account:
+            message = "No AniList account or token set."
+            self.bridge.log.emit(f"AniList sync skipped: {message}")
+            self.bridge.stats_imported.emit(0, message)
+            self.bridge.anilist_synced.emit({"account": "", "titles": 0, "message": message})
             return
         # Snapshot the profile so a mid-flight account switch can't cross files.
         watchlog = self.watchlog
 
         def _run():
+            client = AniListClient(access_token=token)
             try:
-                entries = self.anilist.fetch_user_list(username)
+                if token:
+                    entries, viewer_name = client.fetch_viewer_list()
+                else:
+                    entries = client.fetch_user_list(account)
+                    viewer_name = account
             except Exception as exc:  # noqa: BLE001 - report and stop
-                self.bridge.log.emit(f"AniList import failed: {exc}")
-                self.bridge.stats_imported.emit(0, f"Import failed: {exc}")
+                message = f"AniList sync failed: {exc}"
+                self.bridge.log.emit(message)
+                self.bridge.stats_imported.emit(0, message)
+                self.bridge.anilist_synced.emit(
+                    {"account": account, "titles": 0, "message": message}
+                )
                 return
+            finally:
+                client._session.close()
+
             records = []
             sections = {"Watching": [], "Planning": [], "Completed": []}
             for item in entries:
@@ -945,14 +1055,29 @@ class Controller:
                 )
             imported = watchlog.import_titles(records)
             watchlog.set_anilist_sections(sections)
+            label = viewer_name or account or "AniList"
             count = sum(len(v) for v in sections.values())
             self.bridge.log.emit(
-                f"AniList import: seeded {len(records)} titles "
+                f"AniList sync ({label}): seeded {len(records)} titles "
                 f"({format_hours(imported)}), {count} list entries."
             )
+            self.bridge.library_loaded.emit(
+                {
+                    "username": label,
+                    "sections": self._build_library_sections(entries),
+                    "message": "",
+                }
+            )
             self.bridge.stats_imported.emit(len(records), "")
+            self.bridge.anilist_synced.emit(
+                {"account": label, "titles": len(records), "message": ""}
+            )
 
         threading.Thread(target=_run, daemon=True).start()
+
+    def import_anilist_history(self, username=None):
+        """Back-compat alias for :meth:`sync_anilist` (stats/Library refresh)."""
+        self.sync_anilist(username)
 
     def refresh_library(self, username=None):
         """Fetch the active account's full AniList list for the Library tab.

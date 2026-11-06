@@ -85,6 +85,7 @@ class PageContext:
     url: str
     document_title: str = ""
     next_data: str = None    # Crunchyroll __NEXT_DATA__ JSON string (when present)
+    episode: int = None      # selected episode read from the player page's DOM
 
     @property
     def is_navigation_page(self):
@@ -140,6 +141,14 @@ class BaseDetector:
     def matches(self, url):
         host = urlsplit(url).netloc.lower()
         return any(p.search(host) for p in self.hosts)
+
+    def is_navigation(self, ctx):
+        """True when this tab is a browse/home page that must be ignored.
+
+        Detectors may override this when their site uses a path segment that
+        looks like navigation but is actually part of a watch URL.
+        """
+        return ctx.is_navigation_page
 
     def detect(self, ctx):  # pragma: no cover - abstract
         raise NotImplementedError
@@ -439,6 +448,127 @@ class MiruroDetector(BaseDetector):
                          anilist_id=anilist_id)
 
 
+class AniPmDetector(BaseDetector):
+    """ani.pm: ``/anime/<slug>-<id>[-<token>]`` and ``/ani/<slug>-<anilistId>-<token>``.
+
+    Episode pages add ``/episode-<n>``; links from listings sometimes carry an
+    opaque ``?ep=`` token instead, in which case the episode number comes from
+    the player heading/selected episode or document title. The newer ``/ani/``
+    route embeds the AniList ID, so
+    those detections skip the fuzzy title search.
+    """
+    name = "ani.pm"
+    hosts = [re.compile(r"(?:^|\.)ani\.pm$")]
+
+    _EPISODE_PATH = re.compile(r"/episode-(?P<ep>\d{1,4})/?$", re.I)
+    _ANI_ROUTE = re.compile(
+        r"^/ani/(?P<slug>.+)-(?P<id>\d{1,8})(?:-[A-Za-z0-9]+)?/?$"
+    )
+
+    @classmethod
+    def _episode_from_path(cls, path):
+        m = cls._EPISODE_PATH.search(path.rstrip("/"))
+        return int(m.group("ep")) if m else None
+
+    @staticmethod
+    def _has_episode_query(ctx):
+        params = parse_qs(ctx.query)
+        return bool(params.get("ep") and params["ep"][0])
+
+    def is_navigation(self, ctx):
+        # ``/anime/<slug>`` is a title page, but the same path with ``?ep=`` is
+        # the actual player. The generic "first segment is anime" rule would
+        # reject both, so only ignore pages with no selected episode.
+        return self._episode_from_path(ctx.path) is None and not self._has_episode_query(ctx)
+
+    @staticmethod
+    def _slug_title(slug):
+        """Turn an ani.pm title slug into a clean title.
+
+        Drops the site's internal numeric id and the short share token:
+            ``star-detective-precure-8630-honbtp`` -> ``Star Detective Precure``
+            ``monster-1561``                      -> ``Monster``
+        """
+        slug = re.sub(r"-\d{1,8}-[A-Za-z0-9]{4,}$", "", slug)
+        slug = re.sub(r"-\d{1,8}$", "", slug)
+        return clean_slug(slug) or None
+
+    @staticmethod
+    def _from_page_title(page_title):
+        """Parse ``Watch <Title> Episode N ... · ani.pm`` into (title, episode).
+
+        Returns ``(None, None)`` for generic non-content titles such as the
+        site's home-page title.
+        """
+        t = (page_title or "").strip()
+        if not re.match(r"^(?:Watch|Watching)\s+", t, re.I):
+            return None, None
+        t = re.sub(r"\s*[·|]\s*ani\.pm\s*$", "", t, flags=re.I).strip()
+        t = re.sub(r"^(?:Watch|Watching)\s+", "", t, flags=re.I)
+        t = re.sub(
+            r"\s+(?:English|Japanese)\s+(?:Sub|Dub)(?:bed)?(?:\s*&\s*Dub)?"
+            r"(?:\s+Online)?\s+Free\s*$",
+            "", t, flags=re.I,
+        )
+        episode = parse_episode(t)
+        m = re.search(r"\s*\b(?:Episode|EP)\.?\s*\d{1,4}\b.*$", t, re.I)
+        if m:
+            t = t[:m.start()]
+        return (t.strip(" -–|·") or None), episode
+
+    def detect(self, ctx):
+        path = ctx.path.rstrip("/") or "/"
+        path_episode = self._episode_from_path(path)
+        has_episode_query = self._has_episode_query(ctx)
+
+        # Title pages have no episode selected, so there is no playback to
+        # report (their trailers must not become a presence).
+        if path_episode is None and not has_episode_query:
+            return None
+
+        route_path = re.sub(r"/episode-\d{1,4}/?$", "", path, flags=re.I) or "/"
+        anilist_id = None
+        title = None
+        source = "slug"
+
+        m = self._ANI_ROUTE.match(route_path)
+        if m:
+            anilist_id = int(m.group("id"))
+            title = clean_slug(m.group("slug")) or None
+            source = "url"
+        else:
+            m = re.match(r"^/anime/(?P<slug>[^/]+)/?$", route_path)
+            if m:
+                title = self._slug_title(m.group("slug"))
+
+        page_title, page_episode = self._from_page_title(ctx.document_title)
+        if page_title:
+            title = page_title
+            source = "page"
+
+        # DOM metadata is live across SPA episode changes; document titles can
+        # still describe the previous episode. Never interpret the opaque ?ep=
+        # identifier as an ordinal (even if it happens to contain only digits).
+        dom_episode = ctx.episode
+        if (isinstance(dom_episode, bool) or not isinstance(dom_episode, (int, str))
+                or not re.fullmatch(r"[0-9]{1,4}", str(dom_episode))
+                or int(dom_episode) <= 0):
+            dom_episode = None
+        else:
+            dom_episode = int(dom_episode)
+        episode = path_episode if path_episode is not None else (dom_episode or page_episode)
+        if not title and anilist_id is None:
+            return None
+        return Detection(
+            self.name, ctx.url,
+            raw_title=ctx.document_title,
+            cleaned_title=title,
+            episode=episode,
+            source=source,
+            anilist_id=anilist_id,
+        )
+
+
 # --------------------------------------------------------------------------- #
 # Generic fallback for "known anime site" hosts without a bespoke parser
 # --------------------------------------------------------------------------- #
@@ -549,6 +679,7 @@ class DetectorRegistry:
             HiAnimeDetector(),
             AnimePaheDetector(),
             MiruroDetector(),
+            AniPmDetector(),
             BilibiliDetector(),
             GenericKnownSiteDetector(),
             CustomSiteDetector(custom_sites),
@@ -560,18 +691,21 @@ class DetectorRegistry:
 
     def detect(self, ctx):
         """Return the first successful :class:`Detection`, or None."""
-        # Home/browse/search pages autoplay trailer videos that would look like
-        # a real <video> to the pipeline; there's no anime to identify there.
-        if ctx.is_navigation_page:
-            logger.debug("skipping navigation page %s", ctx.url)
-            return None
         for detector in self.detectors:
-            if detector.matches(ctx.url):
-                try:
-                    detection = detector.detect(ctx)
-                except Exception:  # noqa: BLE001 - one broken site must not kill the app
-                    logger.exception("detector %s raised", detector.name)
-                    detection = None
-                if detection:
-                    return detection
+            if not detector.matches(ctx.url):
+                continue
+            # Home/browse/search pages autoplay trailer videos that would look
+            # like a real <video> to the pipeline; there's no anime to identify
+            # there. Detectors may relax this for sites whose watch URLs share a
+            # path segment with their browse pages (ani.pm's /anime/<slug>).
+            if detector.is_navigation(ctx):
+                logger.debug("skipping navigation page %s", ctx.url)
+                return None
+            try:
+                detection = detector.detect(ctx)
+            except Exception:  # noqa: BLE001 - one broken site must not kill the app
+                logger.exception("detector %s raised", detector.name)
+                detection = None
+            if detection:
+                return detection
         return None

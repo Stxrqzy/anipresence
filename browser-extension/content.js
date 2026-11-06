@@ -27,6 +27,25 @@
     };
   }
 
+  // Keep this reader in sync with PAGE_INFO_JS in src/core/controller.py.
+  function readAniPmEpisode() {
+    if (!/(^|\.)ani\.pm$/i.test(location.hostname)) return null;
+    const ordinal = document.querySelector('.ytw-title__n');
+    const heading = document.querySelector('h1.ytw-title');
+    const current = document.querySelector(
+      '[data-episode-number].is-current, [data-episode-number][aria-current="true"], ' +
+      '[data-episode-number]:has([aria-current="true"])'
+    );
+    // The heading remains mounted even when the playlist is filtered/virtualized.
+    const text = ordinal ? ordinal.textContent.trim().replace(/\.$/, '') : '';
+    const match = heading && heading.textContent.match(/^Episode\s+(\d{1,4})\b/i);
+    const raw = text || (match && match[1]) ||
+      (current && current.getAttribute('data-episode-number'));
+    if (!/^\d{1,4}$/.test(raw || '')) return null;
+    const episode = Number(raw);
+    return episode > 0 ? episode : null;
+  }
+
   let observed = null;
   function snapshot() {
     // Keep event listeners bound to the current player element.
@@ -44,6 +63,7 @@
       isTop: window === window.top,
       url: location.href.slice(0, MAX_URL),
       title: document.title || "",
+      episode: readAniPmEpisode(),
       visibility: document.visibilityState || "hidden",
       focused: document.hasFocus ? document.hasFocus() : false,
       video: readVideo(v),

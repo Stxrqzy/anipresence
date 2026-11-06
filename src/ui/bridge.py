@@ -18,6 +18,7 @@ class UiBridge(QObject):
     stats_imported = Signal(int, str)     # (title count, message) from AniList import
     account_avatar = Signal(str, str)     # (username, avatar URL) — "" URL when none
     library_loaded = Signal(dict)         # {"username", "sections", "message"}
+    anilist_synced = Signal(dict)         # {"account", "titles", "message"} two-way sync result
     calendar_loaded = Signal(dict)         # {"username", "season", "entries", "message"}
     share_tunnel = Signal(str)             # public trycloudflare URL ("" = failed)
     match_pending = Signal(dict)           # low-confidence match candidates for the chooser

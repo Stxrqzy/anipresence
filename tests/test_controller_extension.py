@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QApplication
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from src import __version__
 from src.browser.detectors import VideoState
 from src.browser.extension import ExtensionBridge
 from src.config import ConfigManager
@@ -63,6 +64,108 @@ def test_controller_tick_extension_direct(tmp_path, app, monkeypatch):
     assert detection.website == "GoGoAnime"
     assert detection.episode == 5
     assert detection.video.has_video
+
+
+def test_episode_completion_requires_ninety_percent():
+    from src.browser.detectors import VideoState
+
+    assert not Controller._episode_complete(
+        VideoState(has_video=True, current_time=899, duration=1000)
+    )
+    assert Controller._episode_complete(
+        VideoState(has_video=True, current_time=900, duration=1000)
+    )
+    assert not Controller._episode_complete(
+        VideoState(has_video=True, current_time=10, duration=1000, ended=True)
+    )
+
+
+def test_anilist_sync_threshold_deduplication_and_token_change(tmp_path, app, monkeypatch):
+    from types import SimpleNamespace
+    from src.anime.anilist import Media
+    from src.browser.detectors import Detection
+    from src.core.controller import CurrentSession
+
+    ctrl = make_controller(tmp_path)
+    ctrl.cfg.set(anilist_sync_enabled=True, anilist_access_token="first")
+    calls = []
+
+    class ImmediateThread:
+        def __init__(self, target, **kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    def client(access_token):
+        return SimpleNamespace(
+            sync_progress=lambda *args: calls.append((access_token, args)),
+            _session=SimpleNamespace(close=lambda: None),
+        )
+
+    monkeypatch.setattr("src.core.controller.threading.Thread", ImmediateThread)
+    monkeypatch.setattr("src.core.controller.AniListClient", client)
+    video = VideoState(has_video=True, current_time=899, duration=1000)
+    session = CurrentSession(Detection("site", "url", episode=1, video=video),
+                             Media(id=42, episodes=12), 100, 0, "episode")
+    ctrl._maybe_sync_anilist(session, video)
+    assert not calls
+    video.current_time = 900
+    ctrl._maybe_sync_anilist(session, video)
+    ctrl._maybe_sync_anilist(session, video)
+    assert calls == [("first", (42, 1, 12))]
+    ctrl.cfg.set(anilist_access_token="second", anilist_sync_enabled=False)
+    ctrl._maybe_sync_anilist(session, video)
+    assert len(calls) == 1
+    ctrl.cfg.set(anilist_sync_enabled=True)
+    ctrl._maybe_sync_anilist(session, video)
+    assert calls[-1] == ("second", (42, 1, 12))
+
+
+@pytest.mark.parametrize("paused", [True, False])
+def test_anipm_episode_reaches_discord_and_updates_on_navigation(tmp_path, app, monkeypatch, paused):
+    from src.anime.anilist import Media
+    import src.core.controller as controller_module
+
+    monkeypatch.setattr(controller_module, "APP_DIR", tmp_path)
+    ctrl = make_controller(tmp_path)
+    ctrl.cfg.set(rpc_enabled=True, rpc_broadcast="discord", discord_application_id="123")
+    monkeypatch.setattr(ctrl, "_resolve_anime", lambda detection: (
+        Media(id=20, title_romaji="NARUTO", episodes=220), 100,
+    ))
+    sent = []
+    monkeypatch.setattr(ctrl, "_send_rpc", lambda *args: sent.append(args))
+    payload = {
+        "url": "https://ani.pm/anime/naruto-123?ep=e1.opaque",
+        "title": "Watch NARUTO · ani.pm", "episode": 5,
+        "video": {"hasVideo": True, "currentTime": 557, "duration": 1361, "paused": paused},
+    }
+    ctrl._tick_extension([("ani-tab", payload)])
+    assert ctrl._current.detection.episode == 5
+    assert "Episode 5" in sent[-1][1]
+    if paused:
+        assert "Paused" in sent[-1][1]
+    payload.update(episode=6, url="https://ani.pm/anime/naruto-123?ep=e1.next")
+    ctrl._tick_extension([("ani-tab", payload)])
+    assert ctrl._current.detection.episode == 6
+    assert "Episode 6" in sent[-1][1]
+
+
+def test_anipm_browser_metadata_readers():
+    import shutil
+    import subprocess
+    from pathlib import Path
+    from src.core.controller import PAGE_INFO_JS
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js required for extension JavaScript regression checks")
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [node, str(root / "tests" / "extension_metadata.cjs")],
+        input=PAGE_INFO_JS, text=True, capture_output=True, cwd=root,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_controller_skips_navigation_page(tmp_path, app, monkeypatch):
@@ -251,6 +354,76 @@ def test_refresh_library_emits_sections(tmp_path, app, monkeypatch):
     assert watching[0]["progress"] == 9
 
 
+def test_sync_anilist_prefers_token_and_emits(tmp_path, app, monkeypatch):
+    from src.anime.anilist import Media
+
+    ctrl = make_controller(tmp_path)
+    ctrl.cfg.set(anilist_access_token="tok", anilist_username="someone")
+    ctrl._active_account = "someone"
+
+    seen = {}
+
+    class FakeAniList:
+        def __init__(self, access_token=""):
+            seen["token"] = access_token
+            self._session = type("S", (), {"close": lambda self: None})()
+
+        def fetch_viewer_list(self):
+            seen["method"] = "viewer"
+            media = Media(id=5, title_romaji="Pull Show", episodes=12)
+            return ([{"media": media, "status": "CURRENT", "progress": 3}], "Alice")
+
+        def fetch_user_list(self, username):
+            seen["method"] = "public"
+            return []
+
+    monkeypatch.setattr("src.core.controller.AniListClient", FakeAniList)
+
+    class Capture:
+        def __init__(self):
+            self.calls = []
+
+        def emit(self, *args):
+            self.calls.append(args)
+
+    synced, library = Capture(), Capture()
+    monkeypatch.setattr(ctrl.bridge, "anilist_synced", synced)
+    monkeypatch.setattr(ctrl.bridge, "library_loaded", library)
+
+    ctrl.sync_anilist()
+
+    deadline = time.time() + 5
+    while not synced.calls and time.time() < deadline:
+        time.sleep(0.05)
+    assert synced.calls, "anilist_synced never emitted"
+    assert seen["token"] == "tok"
+    assert seen["method"] == "viewer"  # token path, not the public username
+    assert synced.calls[0][0]["account"] == "Alice"
+    assert synced.calls[0][0]["titles"] == 1
+    # The pull also refreshes the Library tab from the same fetch.
+    assert library.calls, "library_loaded never emitted"
+    assert library.calls[0][0]["sections"]["Watching"][0]["progress"] == 3
+
+
+def test_sync_anilist_without_account_reports(tmp_path, app, monkeypatch):
+    ctrl = make_controller(tmp_path)
+    ctrl.cfg.set(anilist_access_token="", anilist_username="")
+    ctrl._active_account = ""
+
+    class Capture:
+        def __init__(self):
+            self.calls = []
+
+        def emit(self, *args):
+            self.calls.append(args)
+
+    synced = Capture()
+    monkeypatch.setattr(ctrl.bridge, "anilist_synced", synced)
+    ctrl.sync_anilist()
+    assert synced.calls
+    assert "No AniList account" in synced.calls[0][0]["message"]
+
+
 def test_current_season_mapping():
     from datetime import date
 
@@ -310,7 +483,10 @@ def test_refresh_calendar_emits_entries(tmp_path, app, monkeypatch):
         time.sleep(0.05)
     assert cap.calls, "calendar_loaded never emitted"
     payload = cap.calls[0][0]
-    assert "SUMMER" in payload["season"]
+    from src.core.controller import Controller
+
+    season, year = Controller._current_season()
+    assert payload["season"] == f"{season} {year}"
     assert payload["entries"][0]["title"] == "Seasonal Hit"
 
 
@@ -340,7 +516,7 @@ def test_now_playing_snapshot_flow(tmp_path, app, monkeypatch):
     assert snap["duration"] == 1200.0
     assert snap["cover"] == "https://cdn.example/c.jpg"
     assert snap["episode"] == 5
-    assert snap["version"] == "2.1.1"
+    assert snap["version"] == __version__
 
     # Privacy mode -> fully idle.
     ctrl.cfg.set(privacy_mode=True)
