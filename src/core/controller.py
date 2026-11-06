@@ -1364,9 +1364,11 @@ class Controller:
             cover = None
 
         now_ts = int(time.time())
-        start = int(session.session_start)
+        # Discord advances timestamps against the wall clock and has no pause
+        # flag. Omit them while paused; rebuild from the playhead on resume.
+        start = None if video.paused else int(session.session_start)
         end = None
-        if video.duration > 0:
+        if not video.paused and video.duration > 0:
             # Anchor both timestamps to the video's own timeline (position-based):
             # start = when the video would have started to sit at the current
             # position. Seeking forward or backward then never shrinks/stretches
@@ -1481,15 +1483,18 @@ class Controller:
         acknowledged the POST.
         """
         now = int(time.time())
-        start = payload.get("start") or payload.get("timestamps", {}).get("start") or now
+        # An explicit None clears paused playback timestamps. Only activities
+        # without a start field (manual/idle) get a default elapsed timer.
+        start = payload.get("start", payload.get("timestamps", {}).get("start", now))
         end = payload.get("end") or payload.get("timestamps", {}).get("end")
+        timestamps = {k: v for k, v in {"start": start, "end": end}.items() if v is not None}
         vencord_activity = {
             "application_id": self.cfg.data.discord_application_id,
             "name": "Anime",
             "type": 3,  # ActivityType.WATCHING
             "details": details[:128],
             "state": payload.get("state") or "",
-            "timestamps": {"start": start, "end": end} if end else {"start": start},
+            "timestamps": timestamps or None,
             "assets": {
                 "large_image": payload.get("large_image"),
                 "large_text": payload.get("large_text"),

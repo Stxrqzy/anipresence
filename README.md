@@ -35,7 +35,7 @@ from the page title.
 - **Rich Presence** — AniList cover art (highest-resolution variant) as the large
   image, `Watching: <Title>`, `Episode N of M · Next: Ep N+1 · Fri` (episode
   totals + the next airing date, shown when you're caught up), a native playback
-  progress bar, and two buttons (*Watch Anime*,
+  progress bar (hidden while paused, restored at the playhead on resume), and two buttons (*Watch Anime*,
   *Open AniList*).
 - **Vencord bridge** — optional broadcast through a Vencord userplugin
   (`vencord-plugin\anipresence\`) so friends see your presence even with an

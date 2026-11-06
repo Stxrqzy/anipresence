@@ -297,6 +297,53 @@ def test_sync_presence_timestamps_anchor_to_position(tmp_path, app, monkeypatch)
     assert abs((int(time.time()) - start1) - 720) < 3  # elapsed tracks the position
 
 
+@pytest.mark.parametrize("duration", [1200, 0])
+def test_pause_clears_timestamps_and_resume_restores_playhead(tmp_path, app, monkeypatch, duration):
+    from types import SimpleNamespace
+    from src.browser.detectors import Detection
+    from src.core.controller import CurrentSession
+
+    ctrl = make_controller(tmp_path)
+    ctrl.cfg.set(rpc_enabled=True, rpc_broadcast="both", discord_application_id="123")
+    rpc, vencord = [], []
+    ctrl.discord = SimpleNamespace(is_connected=True, update=lambda **kw: rpc.append(kw))
+    ctrl.vencord = SimpleNamespace(send=lambda activity, signature: vencord.append(activity) or True)
+    clock = [2000]
+    monkeypatch.setattr("src.core.controller.time.time", lambda: clock[0])
+    video = VideoState(has_video=True, current_time=300, duration=duration, paused=False)
+    detection = Detection("ani.pm", "https://ani.pm/anime/naruto?ep=opaque",
+                          cleaned_title="Naruto", episode=5, video=video)
+    ctrl._current = CurrentSession(detection, None, 100, 1500, "naruto-5")
+
+    ctrl._sync_presence()
+    assert "start" in rpc[-1]
+    assert "start" in vencord[-1]["timestamps"]
+
+    video.paused = True
+    clock[0] += 1
+    ctrl._sync_presence()
+    assert len(rpc) == len(vencord) == 2  # pause bypasses the normal throttle
+    assert "start" not in rpc[-1] and "end" not in rpc[-1]
+    assert "timestamps" not in vencord[-1]
+    assert rpc[-1]["state"] == "Paused · Episode 5"
+
+    clock[0] += 60
+    ctrl._sync_presence()
+    assert "start" not in rpc[-1] and "timestamps" not in vencord[-1]
+
+    video.paused = False
+    clock[0] += 1
+    ctrl._sync_presence()
+    assert rpc[-1]["state"] == "Episode 5"
+    if duration:
+        assert clock[0] - rpc[-1]["start"] == 300
+        assert rpc[-1]["end"] - rpc[-1]["start"] == duration
+        assert vencord[-1]["timestamps"] == {"start": rpc[-1]["start"], "end": rpc[-1]["end"]}
+    else:
+        assert rpc[-1]["start"] == 1500
+        assert "end" not in rpc[-1]
+
+
 def test_library_sections_group_by_status(tmp_path, app):
     from src.anime.anilist import Media
 
