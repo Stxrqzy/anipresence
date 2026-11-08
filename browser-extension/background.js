@@ -37,6 +37,7 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
       url: isTop ? msg.url : existing.payload.url,
       title: isTop ? msg.title : existing.payload.title,
       episode: isTop ? (msg.episode ?? null) : existing.payload.episode,
+      episodeTitle: isTop ? (msg.episodeTitle || '') : existing.payload.episodeTitle,
       visibility: isTop ? msg.visibility : existing.payload.visibility,
       focused: isTop ? msg.focused : existing.payload.focused,
       video: hasVideo ? msg.video : existing.payload.video,

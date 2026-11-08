@@ -103,5 +103,16 @@ def test_explicit_path_episode_takes_precedence_during_navigation():
         url="https://ani.pm/anime/naruto-123/episode-6",
         document_title="Watch Naruto Episode 5 · ani.pm",
         episode=5,
+        episode_title="Previous episode name",
     ))
     assert det.episode == 6
+    assert det.episode_title == ""
+
+
+@pytest.mark.parametrize("name", [None, {}, ["Name"], "Episode 5", "EP. 5"])
+def test_invalid_or_number_only_episode_title_is_ignored(name):
+    det = REGISTRY.detect(PageContext(
+        url="https://ani.pm/anime/naruto-123?ep=e1.opaque",
+        document_title="Watch Naruto · ani.pm", episode=5, episode_title=name,
+    ))
+    assert det.episode_title == ""

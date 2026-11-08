@@ -49,6 +49,7 @@ class Detection:
     source: str = "url"      # 'url' | 'page' | 'next_data' | 'slug'
     video: VideoState = None
     anilist_id: int = None   # known AniList ID (e.g. embedded in the URL)
+    episode_title: str = ""  # name of the selected episode, when the site provides it
 
 
 # Path segments that denote a site's home/browse/listing page rather than a
@@ -86,6 +87,7 @@ class PageContext:
     document_title: str = ""
     next_data: str = None    # Crunchyroll __NEXT_DATA__ JSON string (when present)
     episode: int = None      # selected episode read from the player page's DOM
+    episode_title: str = ""
 
     @property
     def is_navigation_page(self):
@@ -557,6 +559,11 @@ class AniPmDetector(BaseDetector):
         else:
             dom_episode = int(dom_episode)
         episode = path_episode if path_episode is not None else (dom_episode or page_episode)
+        episode_title = ""
+        if dom_episode is not None and dom_episode == episode and isinstance(ctx.episode_title, str):
+            episode_title = " ".join(ctx.episode_title.split())[:128]
+            if re.fullmatch(r"(?:Episode|EP)\.?\s*\d+", episode_title, re.I):
+                episode_title = ""
         if not title and anilist_id is None:
             return None
         return Detection(
@@ -566,6 +573,7 @@ class AniPmDetector(BaseDetector):
             episode=episode,
             source=source,
             anilist_id=anilist_id,
+            episode_title=episode_title,
         )
 
 

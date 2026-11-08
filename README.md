@@ -22,7 +22,8 @@ from the page title.
   friends.
 - **ani.pm episodes** — reads the active episode from the player heading or
   selected playlist entry, including opaque `?ep=` links and episode switches
-  without a page reload. After upgrading, reload AniPresence Bridge in your
+  without a page reload. Named episodes show their title beside the episode number
+  in Discord, including while paused. After upgrading, reload AniPresence Bridge in your
   browser's extensions page and refresh the ani.pm tab to load the updated reader.
 - **AniList identification** — fuzzy matching with multi-term search fallback
   and a disk cache (default 7-day TTL) to avoid hammering the API.

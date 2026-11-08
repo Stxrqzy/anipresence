@@ -138,17 +138,24 @@ def test_anipm_episode_reaches_discord_and_updates_on_navigation(tmp_path, app, 
     payload = {
         "url": "https://ani.pm/anime/naruto-123?ep=e1.opaque",
         "title": "Watch NARUTO · ani.pm", "episode": 5,
+        "episodeTitle": "A named episode",
         "video": {"hasVideo": True, "currentTime": 557, "duration": 1361, "paused": paused},
     }
     ctrl._tick_extension([("ani-tab", payload)])
     assert ctrl._current.detection.episode == 5
     assert "Episode 5" in sent[-1][1]
+    assert "Episode 5 of 220 · A named episode" in sent[-1][1]
     if paused:
         assert "Paused" in sent[-1][1]
-    payload.update(episode=6, url="https://ani.pm/anime/naruto-123?ep=e1.next")
+    payload.update(episode=6, episodeTitle="Next episode name", url="https://ani.pm/anime/naruto-123?ep=e1.next")
     ctrl._tick_extension([("ani-tab", payload)])
     assert ctrl._current.detection.episode == 6
     assert "Episode 6" in sent[-1][1]
+    assert "Next episode name" in sent[-1][1]
+    assert "A named episode" not in sent[-1][1]
+    payload.update(episodeTitle="")
+    ctrl._tick_extension([("ani-tab", payload)])
+    assert "Next episode name" not in sent[-1][1]
 
 
 def test_anipm_browser_metadata_readers():

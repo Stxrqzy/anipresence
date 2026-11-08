@@ -46,6 +46,19 @@
     return episode > 0 ? episode : null;
   }
 
+  function readAniPmEpisodeTitle() {
+    if (!/(^|\.)ani\.pm$/i.test(location.hostname)) return '';
+    const heading = document.querySelector('h1.ytw-title');
+    const ordinal = document.querySelector('.ytw-title__n');
+    // ani.pm includes an ordinal only for a named episode. Plain "Episode N"
+    // headings and movie/series titles must not become episode names.
+    if (!heading || !ordinal) return '';
+    const text = heading.textContent.trim();
+    const prefix = ordinal.textContent.trim();
+    if (!prefix || !text.startsWith(prefix)) return '';
+    return text.slice(prefix.length).replace(/\s+/g, ' ').trim().slice(0, 128);
+  }
+
   let observed = null;
   function snapshot() {
     // Keep event listeners bound to the current player element.
@@ -64,6 +77,7 @@
       url: location.href.slice(0, MAX_URL),
       title: document.title || "",
       episode: readAniPmEpisode(),
+      episodeTitle: readAniPmEpisodeTitle(),
       visibility: document.visibilityState || "hidden",
       focused: document.hasFocus ? document.hasFocus() : false,
       video: readVideo(v),
