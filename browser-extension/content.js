@@ -8,6 +8,8 @@
 (() => {
   const REPORT_INTERVAL = 3000;
   const MAX_URL = 2000;
+  // Captured in this script, so old tabs are detectable after an extension update.
+  const READER_VERSION = "1.7.0";
 
   function runtime() {
     if (typeof browser !== "undefined" && browser.runtime) return browser.runtime;
@@ -73,6 +75,7 @@
     }
     return {
       type: "report",
+      readerVersion: READER_VERSION,
       isTop: window === window.top,
       url: location.href.slice(0, MAX_URL),
       title: document.title || "",

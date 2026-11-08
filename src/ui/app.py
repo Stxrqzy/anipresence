@@ -848,6 +848,10 @@ class MainWindow(QMainWindow):
         self.cfg = cfg
         self.bridge = bridge
         self.controller = controller
+        self._login_flow = None
+        self._login_generation = 0
+        self._update_busy = False
+        self._update_state = {'stage': 'idle', 'message': 'Updates have not been checked yet.'}
 
         self._current_payload = None
         self._cover_url = ""
@@ -920,6 +924,15 @@ class MainWindow(QMainWindow):
         self._install_resize_filter()
         self._restore_window_state()
         self._system_refresh.start()
+        self._diagnostics_timer = QTimer(self)
+        self._diagnostics_timer.setInterval(3000)
+        self._diagnostics_timer.timeout.connect(self._refresh_extension_diagnostics)
+        self._diagnostics_timer.start()
+        self._update_timer = QTimer(self)
+        self._update_timer.setInterval(6 * 60 * 60 * 1000)
+        self._update_timer.timeout.connect(self._auto_check_updates)
+        self._update_timer.start()
+        QTimer.singleShot(10000, self._auto_check_updates)
 
     # ----------------------------------------------------------------- tray
     def _build_tray(self):
@@ -962,6 +975,8 @@ class MainWindow(QMainWindow):
             self._tray.showMessage(title, message, QSystemTrayIcon.Information, 2500)
 
     def _quit_app(self):
+        if self._login_flow:
+            self._login_flow.cancel()
         self._quitting = True
         self.close()
 
@@ -2316,6 +2331,87 @@ class MainWindow(QMainWindow):
         self.anilist_sync_status.setWordWrap(True)
         mm.addWidget(self.anilist_sync_status)
 
+        login_row = QHBoxLayout()
+        self.anilist_login_btn = QPushButton("Connect AniList")
+        self.anilist_login_btn.clicked.connect(self._on_anilist_login)
+        login_row.addWidget(self.anilist_login_btn)
+        disconnect_btn = QPushButton("Disconnect")
+        disconnect_btn.clicked.connect(self._on_anilist_disconnect)
+        login_row.addWidget(disconnect_btn)
+        self.anilist_retry_btn = QPushButton("Retry failed syncs")
+        self.anilist_retry_btn.clicked.connect(self.controller.retry_anilist_sync)
+        login_row.addWidget(self.anilist_retry_btn)
+        mm.addLayout(login_row)
+        self.anilist_client_edit = QLineEdit(self.cfg.data.anilist_client_id)
+        self.anilist_client_edit.setPlaceholderText("AniList OAuth client ID (one-time setup)")
+        self.anilist_client_edit.editingFinished.connect(
+            lambda: self.cfg.set(anilist_client_id=self.anilist_client_edit.text().strip()))
+        mm.addWidget(self.anilist_client_edit)
+        oauth_hint = QLabel(
+            'Register AniPresence at <a href="https://anilist.co/settings/developer">AniList developer settings</a> '
+            'with redirect URL <b>http://127.0.0.1:8794/callback</b>, then enter its client ID above. '
+            'Connect opens your browser and saves the token automatically; no client secret is needed.')
+        oauth_hint.setOpenExternalLinks(True)
+        oauth_hint.setWordWrap(True)
+        oauth_hint.setObjectName("subLabel")
+        mm.addWidget(oauth_hint)
+        self.anilist_login_status = QLabel("")
+        self.anilist_login_status.setWordWrap(True)
+        mm.addWidget(self.anilist_login_status)
+        self.sync_details = QLabel("")
+        self.sync_details.setTextFormat(Qt.PlainText)
+        self.sync_details.setWordWrap(True)
+        mm.addWidget(self.sync_details)
+
+        mm.addWidget(self._field_label("Discord presence"))
+        self.presence_options = {}
+        for key, label in (
+            ('presence_episode_names', 'Show episode names'),
+            ('presence_airing_dates', 'Show next airing date'),
+            ('presence_cover_art', 'Show cover art'),
+            ('presence_paused_label', 'Show Paused label'),
+        ):
+            check = QCheckBox(label)
+            check.setChecked(getattr(self.cfg.data, key))
+            check.toggled.connect(lambda value, field=key: self._on_presence_option(field, value))
+            self.presence_options[key] = check
+            mm.addWidget(check)
+
+        mm.addWidget(self._field_label("Extension diagnostics"))
+        self.extension_diagnostics = QLabel("")
+        self.extension_diagnostics.setTextFormat(Qt.PlainText)
+        self.extension_diagnostics.setWordWrap(True)
+        mm.addWidget(self.extension_diagnostics)
+        extension_folder_btn = QPushButton("Open installed extension folder")
+        extension_folder_btn.clicked.connect(self._open_extension_folder)
+        mm.addWidget(extension_folder_btn)
+
+        mm.addWidget(self._field_label("App updates"))
+        self.auto_updates_check = QCheckBox("Check for updates on startup and every 6 hours")
+        self.auto_updates_check.setChecked(self.cfg.data.auto_check_updates)
+        self.auto_updates_check.toggled.connect(lambda on: self.cfg.set(auto_check_updates=on))
+        mm.addWidget(self.auto_updates_check)
+        self.update_feed_edit = QLineEdit(self.cfg.data.update_feed_url)
+        self.update_feed_edit.setPlaceholderText("HTTPS release feed or GitHub latest-release API URL")
+        self.update_feed_edit.editingFinished.connect(
+            lambda: self.cfg.set(update_feed_url=self.update_feed_edit.text().strip()))
+        mm.addWidget(self.update_feed_edit)
+        update_row = QHBoxLayout()
+        self.update_check_btn = QPushButton("Check now")
+        self.update_check_btn.clicked.connect(lambda: self._check_for_updates())
+        update_row.addWidget(self.update_check_btn)
+        self.update_download_btn = QPushButton("Download installer")
+        self.update_download_btn.clicked.connect(self._download_update)
+        update_row.addWidget(self.update_download_btn)
+        self.update_install_btn = QPushButton("Install update")
+        self.update_install_btn.clicked.connect(self._install_update)
+        update_row.addWidget(self.update_install_btn)
+        mm.addLayout(update_row)
+        self.update_status_label = QLabel("")
+        self.update_status_label.setTextFormat(Qt.PlainText)
+        self.update_status_label.setWordWrap(True)
+        mm.addWidget(self.update_status_label)
+
         port_row = QHBoxLayout()
         port_label = QLabel("Chrome debugging port")
         port_label.setObjectName("sectionLabel")
@@ -2401,11 +2497,122 @@ class MainWindow(QMainWindow):
 
     def _on_anilist_sync_changed(self, enabled):
         self.cfg.set(anilist_sync_enabled=enabled)
+        if enabled:
+            self.controller.sync_anilist()
 
     def _on_anilist_token_changed(self):
         token = self.anilist_token_edit.text().strip()
+        if token == self.cfg.data.anilist_access_token:
+            return
+        if self._login_flow:
+            self._login_flow.cancel()
+            self._login_flow = None
+            self._login_generation += 1
+            self.anilist_login_btn.setText("Connect AniList")
         self.cfg.set(anilist_access_token=token)
+        self.cfg.set(anilist_sync_account="", anilist_last_sync=0)
         self.controller.anilist.set_access_token(token)
+        self.controller._emit_sync_status(error="", activity="Token changed; use Sync now to verify")
+
+    def _on_presence_option(self, field, value):
+        self.cfg.set(**{field: value})
+        self.controller._last_sent = None
+
+    def _on_anilist_login(self):
+        from ..anime.oauth import OAuthLogin
+        if self._login_flow:
+            self._login_flow.cancel()
+            self._login_flow = None
+            self._login_generation += 1
+            self.anilist_login_btn.setText("Connect AniList")
+            self.anilist_login_status.setText("Login cancelled.")
+            return
+        self.cfg.set(anilist_client_id=self.anilist_client_edit.text().strip())
+        self._login_generation += 1
+        generation = self._login_generation
+        try:
+            flow = OAuthLogin(self.cfg.data.anilist_client_id,
+                lambda result: self.bridge.anilist_login.emit(dict(result, generation=generation)))
+        except (ValueError, OSError) as exc:
+            self.anilist_login_status.setText(str(exc))
+            return
+        self._login_flow = flow
+        self.anilist_login_btn.setText("Cancel login")
+        self.anilist_login_status.setText("Approve access in your browser. Waiting up to 3 minutes…")
+        flow.start()
+        if not webbrowser.open(flow.url):
+            flow.cancel()
+            self._login_flow = None
+            self.anilist_login_btn.setText("Connect AniList")
+            self.anilist_login_status.setText("Could not open your browser. Try again.")
+
+    def _on_anilist_login_result(self, result):
+        if result.get('generation') != self._login_generation:
+            return
+        self._login_flow = None
+        self.anilist_login_btn.setText("Connect AniList")
+        if result.get('message'):
+            self.anilist_login_status.setText(result['message'])
+            return
+        token, account = result['token'], result['account']
+        self.cfg.set(anilist_access_token=token, anilist_sync_account=account,
+                     anilist_last_sync=0, anilist_sync_enabled=True)
+        self.controller.anilist.set_access_token(token)
+        self.controller.add_anilist_account(account)
+        self._populate_anilist_accounts()
+        self._load_toggles_from_config()
+        self.anilist_login_status.setText(f"Connected as {account}.")
+        self.controller.sync_anilist()
+
+    def _on_anilist_disconnect(self):
+        if self._login_flow:
+            self._login_flow.cancel()
+            self._login_flow = None
+        self._login_generation += 1
+        self.cfg.set(anilist_access_token="", anilist_sync_account="",
+                     anilist_last_sync=0, anilist_sync_enabled=False)
+        self.controller.anilist.set_access_token("")
+        self._load_toggles_from_config()
+        self.anilist_login_btn.setText("Connect AniList")
+        self.anilist_login_status.setText("Disconnected. Access can also be revoked in AniList settings.")
+        self.controller._emit_sync_status(error="", activity="Disconnected")
+
+    def _on_sync_status(self, status):
+        last = status.get('last_success')
+        when = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(last)) if last else 'Never'
+        pending = status.get('pending') or []
+        lines = [f"Sync account: {status.get('account') or 'Not verified'}",
+                 f"Last successful sync: {when}", status.get('activity') or 'Ready',
+                 f"Pending episode updates: {len(pending)}"]
+        lines.extend(pending[:8])
+        if status.get('error'):
+            lines.append(f"Last error: {status['error']}")
+        self.sync_details.setText('\n'.join(lines))
+        self.anilist_retry_btn.setEnabled(bool(self.cfg.data.anilist_access_token
+                                              and self.cfg.data.anilist_sync_enabled))
+
+    def _refresh_extension_diagnostics(self):
+        d = self.controller.extension.diagnostics()
+        last = time.strftime('%H:%M:%S', time.localtime(d['last_report'])) if d['last_report'] else 'Never'
+        lines = [f"Bridge: {'listening' if d['running'] else 'stopped'} on port {d['port']}",
+                 f"Extension: {'connected' if d['connected'] else 'not reporting'} · Last report: {last}",
+                 f"Installed/worker version: {d['version'] or 'unknown'} · Required: {d['expected']}",
+                 f"Open-tab readers: {', '.join(d['readers']) or 'none'}"]
+        if d['rejected']:
+            lines.append('Token mismatch: reload the extension or check its Options page.')
+        elif d['connected'] and d['version'] != d['expected']:
+            lines.append('Reload/update AniPresence Bridge in your browser’s extensions page, then refresh watching tabs.')
+        elif d['connected'] and any(v != d['expected'] for v in d['readers']):
+            lines.append('Old content script detected: refresh your watching tabs.')
+        elif not d['connected']:
+            lines.append('Enable AniPresence Bridge and open/refresh an anime tab.')
+        self.extension_diagnostics.setText('\n'.join(lines))
+
+    def _open_extension_folder(self):
+        import os
+        folder = (Path(sys.executable).parent / 'extension' if getattr(sys, 'frozen', False)
+                  else Path(__file__).resolve().parents[2] / 'browser-extension')
+        os.startfile(str(folder))
 
     def _on_port_changed(self, value):
         self.cfg.set(chrome_debugging_port=value)
@@ -2907,6 +3114,9 @@ class MainWindow(QMainWindow):
         self.bridge.account_avatar.connect(self._on_account_avatar)
         self.bridge.library_loaded.connect(self._on_library_loaded)
         self.bridge.anilist_synced.connect(self._on_anilist_synced)
+        self.bridge.anilist_sync_status.connect(self._on_sync_status)
+        self.bridge.anilist_login.connect(self._on_anilist_login_result)
+        self.bridge.update_status.connect(self._on_update_status)
         self.bridge.calendar_loaded.connect(self._on_calendar_loaded)
         self.bridge.share_tunnel.connect(self._on_tunnel_public_url)
         self.bridge.match_pending.connect(self._on_match_pending)
@@ -3002,6 +3212,15 @@ class MainWindow(QMainWindow):
         with QSignalBlocker(self.anilist_sync_check):
             self.anilist_sync_check.setChecked(self.cfg.data.anilist_sync_enabled)
         self.anilist_token_edit.setText(self.cfg.data.anilist_access_token)
+        self.anilist_client_edit.setText(self.cfg.data.anilist_client_id)
+        for field, check in self.presence_options.items():
+            load(check, getattr(self.cfg.data, field))
+        load(self.auto_updates_check, self.cfg.data.auto_check_updates)
+        self.update_feed_edit.setText(self.cfg.data.update_feed_url)
+        self._on_sync_status(self.controller.sync_status())
+        self._refresh_extension_diagnostics()
+        self._render_update_status()
+        self.anilist_login_btn.setText("Cancel login" if self._login_flow else "Connect AniList")
         with QSignalBlocker(self.port_spin):
             self.port_spin.setValue(int(self.cfg.data.chrome_debugging_port))
         load(self.paused_check, self.cfg.data.show_paused_presence)
@@ -3148,7 +3367,11 @@ class MainWindow(QMainWindow):
     def _do_rebuild(self):
         for sig in (self.bridge.chrome_status, self.bridge.discord_status,
                     self.bridge.detection, self.bridge.recent, self.bridge.log,
-                    self.bridge.stats_imported, self.bridge.account_avatar):
+                    self.bridge.stats_imported, self.bridge.account_avatar,
+                    self.bridge.library_loaded, self.bridge.anilist_synced,
+                    self.bridge.anilist_sync_status, self.bridge.anilist_login,
+                    self.bridge.update_status, self.bridge.calendar_loaded,
+                    self.bridge.share_tunnel, self.bridge.match_pending):
             try:
                 sig.disconnect()
             except (TypeError, RuntimeError):
@@ -3865,53 +4088,82 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def _check_for_updates(self, parent=None):
-        """Compare the local version against an update feed (if configured)."""
+        """Check a release feed in the background; results are delivered via Qt."""
+        import threading
+        from ..updates import check_release, version_tuple
+        if self._update_busy:
+            return
         feed = (self.cfg.data.update_feed_url or "").strip()
         if not feed:
-            self._log_line("No update feed configured (set update_feed_url in config.json).")
-            self._notify("AniPresence", "No update feed configured.")
+            self._on_update_status({'stage': 'error', 'message': 'Set a release feed URL in Settings → App updates.'})
             return
+        self._update_busy = True
+        self._on_update_status({'stage': 'checking', 'message': 'Checking for updates…'})
 
-        def done(ok, latest):
-            if not ok:
-                self._notify("AniPresence", "Update check failed (network error).")
-                return
-            current_parts = _version_tuple(__version__)
-            latest_parts = _version_tuple(latest)
-            if not current_parts or not latest_parts:
-                self._notify("AniPresence", f"Could not parse versions ({latest}).")
-                return
-            if latest_parts > current_parts:
-                self._notify(
-                    "AniPresence",
-                    f"Update available: {latest} (you have {__version__}).",
-                )
-            else:
-                self._notify(
-                    "AniPresence",
-                    f"You're up to date ({__version__}).",
-                )
+        def run():
+            try:
+                release = check_release(feed)
+                if version_tuple(release['version']) > version_tuple(__version__):
+                    suffix = '' if release['url'] else ' (installer not attached to release yet)'
+                    result = {'stage': 'available', 'release': release,
+                              'message': f"Version {release['version']} is available{suffix}."}
+                else:
+                    result = {'stage': 'current', 'message': f"You're up to date ({__version__})."}
+            except Exception as exc:
+                result = {'stage': 'error', 'message': f'Update check failed: {exc}'}
+            self.bridge.update_status.emit(result)
+        threading.Thread(target=run, daemon=True, name='update-check').start()
 
-        self._log_line(f"Checking for updates against {feed} ...")
-        # Dedicated manager: the shared _nam routes replies through _on_cover_reply,
-        # which would misread a JSON feed as an image.
-        nam = QNetworkAccessManager(self)
-        req = QNetworkRequest(QUrl(feed))
-        reply = nam.get(req)
+    def _auto_check_updates(self):
+        if self.cfg.data.auto_check_updates and self._update_state.get('stage') != 'downloaded':
+            self._check_for_updates()
 
-        def on_reply():
-            err = reply.error()
-            latest = ""
-            if err == QNetworkReply.NoError:
-                import json as _json
-                try:
-                    latest = _json.loads(bytes(reply.readAll()).decode("utf-8", "ignore")).get("version", "")
-                except (ValueError, AttributeError):
-                    latest = ""
-            reply.deleteLater()
-            done(err == QNetworkReply.NoError, latest)
+    def _on_update_status(self, result):
+        self._update_state = result
+        if result.get('stage') not in ('checking', 'downloading'):
+            self._update_busy = False
+        self._render_update_status()
+        if result.get('stage') == 'available':
+            self._notify('AniPresence update', result['message'] + ' Download it in Settings → App updates.')
 
-        reply.finished.connect(on_reply)
+    def _render_update_status(self):
+        state = self._update_state
+        self.update_status_label.setText(state.get('message') or '')
+        self.update_check_btn.setEnabled(not self._update_busy)
+        self.update_download_btn.setEnabled(not self._update_busy and bool((state.get('release') or {}).get('url')))
+        self.update_install_btn.setEnabled(state.get('stage') == 'downloaded')
+
+    def _download_update(self):
+        import threading
+        from ..updates import download_release
+        release = self._update_state.get('release')
+        if self._update_busy or not release or not release.get('url'):
+            return
+        self._update_busy = True
+        self._on_update_status({'stage': 'downloading', 'message': 'Downloading installer…', 'release': release})
+        def run():
+            try:
+                path = download_release(release, APP_DIR / 'updates', lambda percent:
+                    self.bridge.update_status.emit({'stage': 'downloading', 'release': release,
+                                                    'message': f'Downloading installer… {percent}%'}))
+                result = {'stage': 'downloaded', 'release': release, 'path': str(path),
+                          'message': f"Version {release['version']} downloaded. Click Install update to launch setup."}
+            except Exception as exc:
+                result = {'stage': 'error', 'release': release, 'message': f'Download failed: {exc}'}
+            self.bridge.update_status.emit(result)
+        threading.Thread(target=run, daemon=True, name='update-download').start()
+
+    def _install_update(self):
+        import os
+        path = self._update_state.get('path')
+        if self._update_state.get('stage') != 'downloaded' or not path:
+            return
+        try:
+            os.startfile(path)
+        except OSError as exc:
+            self.update_status_label.setText(f'Could not launch installer: {exc}')
+            return
+        self._quit_app()
 
     def _on_log(self, line):
         self.log_view.appendPlainText(
@@ -4606,6 +4858,9 @@ class MainWindow(QMainWindow):
         self._save_window_state()
         self._unregister_hotkey()
         self._stop_tunnel()
+        if self._login_flow:
+            self._login_flow.cancel()
+            self._login_generation += 1
         self.controller.request_stop()
         super().closeEvent(event)
 

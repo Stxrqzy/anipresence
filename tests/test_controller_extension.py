@@ -28,6 +28,11 @@ def app():
     return QApplication(sys.argv)
 
 
+@pytest.fixture(autouse=True)
+def isolate_app_data(tmp_path, monkeypatch):
+    monkeypatch.setattr('src.core.controller.APP_DIR', tmp_path)
+
+
 def make_controller(tmp_path):
     cfg = ConfigManager(str(tmp_path / "config.json"))
     cfg.set(rpc_enabled=False, detection_enabled=True, extension_port=0)
@@ -120,6 +125,73 @@ def test_anilist_sync_threshold_deduplication_and_token_change(tmp_path, app, mo
     ctrl.cfg.set(anilist_sync_enabled=True)
     ctrl._maybe_sync_anilist(session, video)
     assert calls[-1] == ("second", (42, 1, 12))
+
+
+def test_failed_episode_can_retry_after_leaving_tab(tmp_path, app, monkeypatch):
+    from types import SimpleNamespace
+    from src.anime.anilist import Media
+    from src.browser.detectors import Detection
+    from src.core.controller import CurrentSession
+
+    ctrl = make_controller(tmp_path)
+    ctrl.cfg.set(anilist_access_token='token', anilist_sync_enabled=True, anilist_sync_account='Alice')
+    calls = []
+    class ImmediateThread:
+        def __init__(self, target, **kw): self.target = target
+        def start(self): self.target()
+    def update(*args):
+        calls.append(args)
+        if len(calls) == 1:
+            raise RuntimeError('offline')
+        return True
+    monkeypatch.setattr('src.core.controller.threading.Thread', ImmediateThread)
+    monkeypatch.setattr('src.core.controller.AniListClient', lambda **kw: SimpleNamespace(
+        sync_progress=update, _session=SimpleNamespace(close=lambda: None)))
+    video = VideoState(has_video=True, duration=1000, current_time=950)
+    session = CurrentSession(Detection('site', 'url', episode=5, video=video),
+                             Media(id=20, title_romaji='Naruto', episodes=220), 100, 0, 'key')
+    ctrl._maybe_sync_anilist(session, video)
+    assert ctrl.sync_status()['pending'] == ['Naruto · Episode 5']
+    assert ctrl.sync_status()['error'] == 'offline'
+    ctrl._current = None
+    ctrl._retry_pending_episodes()  # cooldown still applies
+    assert len(calls) == 1
+    ctrl.cfg.set(anilist_access_token='other')
+    ctrl._retry_pending_episodes(force=True)
+    assert len(calls) == 1  # never send another account's pending episode
+    ctrl.cfg.set(anilist_access_token='token')
+    ctrl._retry_pending_episodes(force=True)
+    assert len(calls) == 2
+    assert not ctrl.sync_status()['pending']
+    assert not ctrl.sync_status()['error']
+    assert ctrl.sync_status()['last_success'] > 0
+
+
+def test_presence_options_and_pause_with_label_hidden(tmp_path, app, monkeypatch):
+    from src.anime.anilist import Media
+    from src.browser.detectors import Detection
+    from src.core.controller import CurrentSession
+    ctrl = make_controller(tmp_path)
+    ctrl.cfg.set(rpc_enabled=True, discord_application_id='123', presence_episode_names=False,
+                 presence_cover_art=False, presence_airing_dates=False, presence_paused_label=False)
+    video = VideoState(has_video=True, current_time=60, duration=0, paused=False)
+    detection = Detection('ani.pm', 'url', episode=3, video=video, episode_title='Episode name')
+    media = Media(id=1, title_romaji='Anime', episodes=12, cover_large='https://example.com/cover.jpg',
+                  next_airing_at=int(time.time())+3600, next_airing_episode=4)
+    ctrl._current = CurrentSession(detection, media, 100, time.time(), 'key')
+    sent = []
+    monkeypatch.setattr(ctrl, '_send_rpc', lambda *args: sent.append(args))
+    ctrl._sync_presence()
+    assert sent[-1][1] == 'Episode 3 of 12'
+    assert sent[-1][2] is None
+    video.paused = True
+    ctrl._sync_presence()
+    assert len(sent) == 2  # identical text still clears the timer immediately
+    assert sent[-1][4] is None and sent[-1][5] is None
+    ctrl.cfg.set(presence_episode_names=True, presence_cover_art=True)
+    ctrl._sync_presence()
+    assert 'Episode name' in sent[-1][1]
+    assert sent[-1][2] == media.cover_large
 
 
 @pytest.mark.parametrize("paused", [True, False])

@@ -192,6 +192,14 @@ class Controller:
         self._anilist_synced = set()
         self._anilist_sync_retry = {}
         self._anilist_sync_lock = threading.Lock()
+        self._anilist_status_lock = threading.RLock()
+        self._anilist_pending = {}
+        self._anilist_pending_errors = {}
+        self._anilist_pull_inflight = False
+        self._anilist_pull_token = None
+        self._anilist_pull_again = False
+        self._anilist_sync_error = ""
+        self._anilist_sync_activity = "Ready"
         self._last_recent_emit = 0.0
 
     def set_custom_sites(self, sites):
@@ -308,6 +316,7 @@ class Controller:
 
     # ------------------------------------------------------------------ tick
     def _tick(self):
+        self._retry_pending_episodes()
         # Reconnect to Discord opportunistically (throttled) when enabled. A
         # vencord-only broadcast never touches the local pipe.
         if (
@@ -710,11 +719,14 @@ class Controller:
         import hashlib
         token = self.cfg.data.anilist_access_token.strip()
         sync_key = (hashlib.sha256(token.encode()).hexdigest(), session.media.id, episode)
-        if sync_key in self._anilist_synced or sync_key in self._anilist_sync_inflight:
-            return
-        if time.monotonic() < self._anilist_sync_retry.get(sync_key, 0):
-            return
-        self._anilist_sync_inflight.add(sync_key)
+        with self._anilist_status_lock:
+            if sync_key in self._anilist_synced or sync_key in self._anilist_sync_inflight:
+                return
+            if time.monotonic() < self._anilist_sync_retry.get(sync_key, 0):
+                return
+            self._anilist_sync_inflight.add(sync_key)
+            self._anilist_pending[sync_key] = session
+        self._emit_sync_status(activity=f"Updating episode {episode}…")
         media_id = session.media.id
         total = session.media.episodes
 
@@ -723,7 +735,8 @@ class Controller:
                 # Serialize read/update pairs and retain the token captured for
                 # this episode even if Settings changes while work is queued.
                 with self._anilist_sync_lock:
-                    if not self.cfg.data.anilist_sync_enabled or self.stop_event.is_set():
+                    if (not self.cfg.data.anilist_sync_enabled or self.stop_event.is_set()
+                            or token != self.cfg.data.anilist_access_token.strip()):
                         return
                     client = AniListClient(access_token=token)
                     try:
@@ -735,14 +748,71 @@ class Controller:
                         f"AniList progress updated: {session.media.display_title()} "
                         f"episode {episode}."
                     )
-                self._anilist_synced.add(sync_key)
+                with self._anilist_status_lock:
+                    self._anilist_synced.add(sync_key)
+                    self._anilist_pending.pop(sync_key, None)
+                    self._anilist_pending_errors.pop(sync_key, None)
+                    self._anilist_sync_retry.pop(sync_key, None)
+                if token == self.cfg.data.anilist_access_token.strip():
+                    self.cfg.set(anilist_last_sync=time.time())
+                    self._emit_sync_status(error="", activity=f"Episode {episode} is up to date")
             except Exception as exc:  # noqa: BLE001 - syncing must never stop detection
-                self._anilist_sync_retry[sync_key] = time.monotonic() + 60
+                with self._anilist_status_lock:
+                    self._anilist_sync_retry[sync_key] = time.monotonic() + 60
+                    self._anilist_pending_errors[sync_key] = str(exc)
+                if token == self.cfg.data.anilist_access_token.strip():
+                    self._emit_sync_status(error=str(exc), activity=f"Episode {episode} needs retry")
                 self.bridge.log.emit(f"AniList sync failed for episode {episode}: {exc}")
             finally:
-                self._anilist_sync_inflight.discard(sync_key)
+                with self._anilist_status_lock:
+                    self._anilist_sync_inflight.discard(sync_key)
+                    if sync_key in self._anilist_pending:
+                        self._anilist_sync_retry.setdefault(sync_key, time.monotonic() + 60)
+                self._emit_sync_status()
 
         threading.Thread(target=_run, daemon=True).start()
+
+    def sync_status(self):
+        import hashlib
+        token_key = hashlib.sha256(self.cfg.data.anilist_access_token.strip().encode()).hexdigest()
+        with self._anilist_status_lock:
+            pending = [f"{session.media.display_title()} · Episode {key[2]}"
+                       for key, session in self._anilist_pending.items() if key[0] == token_key]
+            errors = list(dict.fromkeys(error for key, error in self._anilist_pending_errors.items()
+                                        if key[0] == token_key))
+            return {'account': self.cfg.data.anilist_sync_account,
+                    'last_success': self.cfg.data.anilist_last_sync,
+                    'pending': pending, 'error': '; '.join(errors) or self._anilist_sync_error,
+                    'activity': self._anilist_sync_activity}
+
+    def _emit_sync_status(self, error=None, activity=None):
+        with self._anilist_status_lock:
+            if error is not None:
+                self._anilist_sync_error = error
+            if activity is not None:
+                self._anilist_sync_activity = activity
+            status = self.sync_status()
+        self.bridge.anilist_sync_status.emit(status)
+
+    def retry_anilist_sync(self):
+        """Retry failed completed episodes, even after the viewer changes tabs."""
+        self._retry_pending_episodes(force=True)
+        self.sync_anilist()
+
+    def _retry_pending_episodes(self, force=False):
+        import hashlib
+        if (not self.cfg.data.anilist_sync_enabled or not self.cfg.data.detection_enabled
+                or self._manual or self.stop_event.is_set()):
+            return
+        token_key = hashlib.sha256(self.cfg.data.anilist_access_token.strip().encode()).hexdigest()
+        with self._anilist_status_lock:
+            jobs = [(key, session) for key, session in self._anilist_pending.items()
+                    if key[0] == token_key and key not in self._anilist_sync_inflight
+                    and (force or time.monotonic() >= self._anilist_sync_retry.get(key, float('inf')))]
+            for key, _ in jobs:
+                self._anilist_sync_retry.pop(key, None)
+        for _, session in jobs:
+            self._maybe_sync_anilist(session, session.detection.video)
 
     def _flush_watch(self, key):
         secs = self._watch_accum.pop(key, 0)
@@ -1038,10 +1108,18 @@ class Controller:
             self.bridge.stats_imported.emit(0, message)
             self.bridge.anilist_synced.emit({"account": "", "titles": 0, "message": message})
             return
+        with self._anilist_status_lock:
+            if self._anilist_pull_inflight:
+                if token != self._anilist_pull_token:
+                    self._anilist_pull_again = True
+                return
+            self._anilist_pull_inflight = True
+            self._anilist_pull_token = token
+        self._emit_sync_status(activity="Reading AniList list…")
         # Snapshot the profile so a mid-flight account switch can't cross files.
         watchlog = self.watchlog
 
-        def _run():
+        def _pull():
             client = AniListClient(access_token=token)
             try:
                 if token:
@@ -1056,10 +1134,17 @@ class Controller:
                 self.bridge.anilist_synced.emit(
                     {"account": account, "titles": 0, "message": message}
                 )
+                self._emit_sync_status(error=str(exc), activity="List sync failed")
                 return
             finally:
                 client._session.close()
 
+            if token != self.cfg.data.anilist_access_token.strip() or self.stop_event.is_set():
+                self.bridge.anilist_synced.emit({'message': 'Sync cancelled: account changed.'})
+                return
+            target_log = watchlog
+            if token and viewer_name.casefold() != account.casefold():
+                target_log = WatchLog(path=watchlog_path_for(viewer_name, APP_DIR))
             records = []
             sections = {"Watching": [], "Planning": [], "Completed": []}
             for item in entries:
@@ -1069,8 +1154,8 @@ class Controller:
                 records, sections = self._categorize_list_entry(
                     item, media, records, sections
                 )
-            imported = watchlog.import_titles(records)
-            watchlog.set_anilist_sections(sections)
+            imported = target_log.import_titles(records)
+            target_log.set_anilist_sections(sections)
             label = viewer_name or account or "AniList"
             count = sum(len(v) for v in sections.values())
             self.bridge.log.emit(
@@ -1088,6 +1173,24 @@ class Controller:
             self.bridge.anilist_synced.emit(
                 {"account": label, "titles": len(records), "message": ""}
             )
+            if token:
+                self.cfg.set(anilist_sync_account=viewer_name, anilist_last_sync=time.time())
+            self._emit_sync_status(error="", activity=f"Imported {len(records)} titles from {label}")
+
+        def _run():
+            try:
+                with self._anilist_sync_lock:
+                    _pull()
+            except Exception as exc:
+                self._emit_sync_status(error=str(exc), activity="List sync failed")
+                self.bridge.anilist_synced.emit({'message': f'Sync failed: {exc}'})
+            finally:
+                with self._anilist_status_lock:
+                    self._anilist_pull_inflight = False
+                    restart = self._anilist_pull_again
+                    self._anilist_pull_again = False
+                if restart and not self.stop_event.is_set():
+                    self.sync_anilist()
 
         threading.Thread(target=_run, daemon=True).start()
 
@@ -1358,17 +1461,17 @@ class Controller:
 
         title = (media.display_title() if media else None) or detection.cleaned_title or detection.raw_title
         episode = format_episode_progress(detection.episode, media.episodes if media else None)
-        if detection.episode_title:
+        if self.cfg.data.presence_episode_names and detection.episode_title:
             episode = " · ".join(part for part in (episode, detection.episode_title) if part)
 
         airing = ""
-        if media and media.next_airing_at and not video.paused:
+        if self.cfg.data.presence_airing_dates and media and media.next_airing_at and not video.paused:
             airing = next_airing_label(
                 media.next_airing_at, media.next_airing_episode, detection.episode
             )
 
         details = title[:128]
-        if video.paused:
+        if video.paused and self.cfg.data.presence_paused_label:
             state = ("Paused · " + episode) if episode else "Paused"
         else:
             # Discord's native progress bar already shows the playback time.
@@ -1379,6 +1482,8 @@ class Controller:
         # extension and be publicly reachable for Discord to proxy it. Never
         # send an empty value (Discord's Joi rejects "" on asset keys).
         cover = (media.cover_extra_large or media.cover_large) if media else None
+        if not self.cfg.data.presence_cover_art:
+            cover = None
         if not cover:
             cover = None
 
@@ -1551,6 +1656,7 @@ class Controller:
     @staticmethod
     def _signature(payload):
         stable = {k: payload[k] for k in ("details", "state", "buttons", "large_image")}
+        stable['timed'] = payload.get('start') is not None or payload.get('end') is not None
         return json.dumps(stable, sort_keys=True, default=str)
 
     def _should_send(self, payload):
@@ -1559,6 +1665,8 @@ class Controller:
         if self._last_sent is None:
             return True
         if self._signature(payload) != self._last_sent["sig"]:
+            return True
+        if (payload.get("end") is None) != (self._last_sent.get("end") is None):
             return True
         if payload.get("end") and self._last_sent.get("end"):
             if abs(payload["end"] - self._last_sent["end"]) >= 15:

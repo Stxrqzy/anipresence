@@ -32,6 +32,10 @@ class Config:
     chrome_path: str = ""
     anilist_cache_ttl_days: int = 7
     show_paused_presence: bool = True
+    presence_episode_names: bool = True
+    presence_airing_dates: bool = True
+    presence_cover_art: bool = True
+    presence_paused_label: bool = True
     rpc_enabled: bool = True
     rpc_broadcast: str = "discord"    # "discord" | "vencord" | "both"
     detection_enabled: bool = True
@@ -59,9 +63,13 @@ class Config:
     anilist_accounts: list = field(default_factory=list)
     anilist_sync_enabled: bool = False
     anilist_access_token: str = ""
+    anilist_client_id: str = ""
+    anilist_sync_account: str = ""
+    anilist_last_sync: float = 0.0
     custom_sites: list = field(default_factory=list)   # [{"name": str, "host": str}]
     hide_adult_content: bool = True
-    update_feed_url: str = ""
+    update_feed_url: str = "https://api.github.com/repos/Stxrqzy/anipresence/releases/latest"
+    auto_check_updates: bool = True
     onboarding_complete: bool = False
     hotkey_toggle: str = "Ctrl+Alt+A"        # show/hide the window
     hotkey_pause: str = "Ctrl+Alt+P"         # pause/resume auto-detection
@@ -92,6 +100,8 @@ class ConfigManager:
         # upgrading users never see the first-run wizard.
         if "onboarding_complete" not in raw:
             self.data.onboarding_complete = True
+        if "auto_check_updates" not in raw and not self.data.update_feed_url:
+            self.data.update_feed_url = Config().update_feed_url
         # Migrate the pre-account single-username config: it becomes one account.
         if not self.data.anilist_accounts and self.data.anilist_username.strip():
             self.data.anilist_accounts = [self.data.anilist_username.strip()]

@@ -378,7 +378,14 @@ defaults). All keys:
 | `anilist_username` | `""` | Public AniList username used for account lists and stats imports |
 | `anilist_sync_enabled` | `false` | Two-way AniList sync: pull your list and push progress after an episode is substantially watched |
 | `anilist_access_token` | `""` | OAuth bearer token for the sync account (enables private-list reads and progress updates) |
+| `anilist_client_id` | `""` | Public OAuth client ID for browser-based AniList login |
 | `show_paused_presence` | `true` | Show a "Paused" presence instead of hiding it |
+| `presence_episode_names` | `true` | Include detected episode names in Discord |
+| `presence_airing_dates` | `true` | Include the next airing date when available |
+| `presence_cover_art` | `true` | Include anime cover art in Discord |
+| `presence_paused_label` | `true` | Include the Paused text label (timers still stop when disabled) |
+| `auto_check_updates` | `true` | Check at startup and every six hours |
+| `update_feed_url` | GitHub latest-release API for `Stxrqzy/anipresence` | HTTPS GitHub release API or custom JSON feed |
 | `rpc_enabled` | `true` | Master switch for Discord Rich Presence |
 | `rpc_broadcast` | `"discord"` | Where to announce activity: `"discord"` (RPC pipe), `"vencord"` (Vencord plugin bridge), or `"both"` |
 | `detection_enabled` | `true` | Master switch for Chrome detection |
@@ -403,9 +410,10 @@ Logs: `%APPDATA%\AniPresence\logs\anipresence.log`.
 
 ### Two-way AniList sync
 
-Add your AniList username in Settings, obtain an AniList OAuth access token for
-your account, paste it into **AniList access token**, and enable **Keep AniList
-in sync (two-way)**. Sync then runs in both directions:
+In Settings → Other Settings, use **Connect AniList** to approve access in your
+browser. AniPresence verifies the token's owner, selects that account, and enables
+sync. You can also paste an existing token into **AniList access token** and enable
+**Keep AniList in sync (two-way)**. Sync runs in both directions:
 
 - **Pull (AniList → app).** Your list is read into the Library and Stats tabs on
   every launch and whenever you press **Sync now**. With a token the read uses
@@ -419,6 +427,61 @@ in sync (two-way)**. Sync then runs in both directions:
 The token belongs to the account that receives updates; the username selector
 only controls the public fallback. The token is stored locally in `config.json`;
 do not share it.
+
+#### Browser login setup (once)
+
+Create an application at <https://anilist.co/settings/developer> named AniPresence.
+Set its redirect URL to **`http://127.0.0.1:8794/callback`** and paste its public
+client ID into the Settings field. No client secret is used or bundled. Then
+**Connect AniList** opens your default browser, and the returned token is saved
+automatically. Login expires after three minutes and can be cancelled. The
+loopback listener only runs during login. Disconnect clears the local token;
+access may also be revoked from AniList's settings.
+
+The sync panel shows the verified account, last successful sync, pending episode
+updates, and errors. **Retry failed syncs** retries completed episodes even after
+you leave their tabs, and refreshes the list. Failed episode updates retry after a
+60-second cooldown while the app runs. The pending queue lasts for the current app
+session. Progress belonging to another token is never retried under a new token.
+
+### Presence controls and extension diagnostics
+
+Settings → Other Settings includes toggles for episode names, next-airing dates,
+cover art, and the Paused label. **Keep presence when video is paused** controls
+whether the whole activity stays visible. Paused playback never displays a moving
+timer, regardless of the label toggle.
+
+Extension diagnostics show the bridge port, last report, background-worker
+version, and the reader versions in open tabs. A mismatched worker version calls
+for reloading/updating the extension; a stale tab reader calls for refreshing the
+anime page. **Open installed extension folder** locates the bundle to load in the
+browser. The panel also reports token mismatches and disconnected extensions.
+
+### Automatic update checks and downloads
+
+Settings → Other Settings → App updates checks on startup and every six hours,
+notifies you when a newer stable version exists, and offers **Download installer**
+with progress followed by **Install update**. Install launches setup and quits the
+running app. Downloads go to `%APPDATA%\AniPresence\updates` and are checked against
+the feed's SHA-256 digest when one is supplied.
+
+The default feed is the GitHub latest-release API for `Stxrqzy/anipresence`.
+**The repository must be public and have a published release with an installer
+asset**; pushing a commit/tag alone does not publish the installer. For private
+development repositories, host a public HTTPS JSON feed instead:
+
+```json
+{
+  "version": "2.4.0",
+  "url": "https://your-host.example/AniPresence-Setup-2.4.0.exe",
+  "sha256": "<64-character SHA-256 hash>"
+}
+```
+
+`scripts/build.ps1` creates `installer/update.json` with the installer hash and
+the expected GitHub release-asset URL. Publish the installer on release `v2.4.0`
+(or the version being built), or upload both files to your own host and adjust
+the feed URL. This app does not embed GitHub credentials for private releases.
 
 ---
 

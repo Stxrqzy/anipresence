@@ -19,6 +19,9 @@ class UiBridge(QObject):
     account_avatar = Signal(str, str)     # (username, avatar URL) — "" URL when none
     library_loaded = Signal(dict)         # {"username", "sections", "message"}
     anilist_synced = Signal(dict)         # {"account", "titles", "message"} two-way sync result
+    anilist_sync_status = Signal(dict)    # account, last_success, pending, error, activity
+    anilist_login = Signal(dict)          # verified OAuth result (never logged)
+    update_status = Signal(dict)          # check/download result from background workers
     calendar_loaded = Signal(dict)         # {"username", "season", "entries", "message"}
     share_tunnel = Signal(str)             # public trycloudflare URL ("" = failed)
     match_pending = Signal(dict)           # low-confidence match candidates for the chooser

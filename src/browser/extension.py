@@ -264,6 +264,8 @@ class ExtensionBridge:
         self._thread = None
         self._notified_activity = False
         self._notified_reject = 0.0
+        self._last_report = 0.0
+        self._extension_version = ""
         # Set by the controller so GET /now.json can serve a live snapshot.
         self.now_provider = None
 
@@ -318,6 +320,8 @@ class ExtensionBridge:
             tabs = [body]
         now = time.time()
         with self._lock:
+            self._last_report = now
+            self._extension_version = str(body.get("extensionVersion") or "")[:32] if isinstance(body, dict) else ""
             for item in tabs:
                 if not isinstance(item, dict):
                     continue
@@ -345,6 +349,20 @@ class ExtensionBridge:
             self._tabs.clear()
 
     # ------------------------------------------------------------- diagnostics
+    def diagnostics(self):
+        """Local bridge health; never exposes the bridge token or page URLs."""
+        now = time.time()
+        with self._lock:
+            readers = sorted({str(e['payload'].get('readerVersion') or 'unknown')[:32]
+                              for e in self._tabs.values() if now - e['at'] <= TAB_TTL})
+            return {
+                'running': self.running, 'port': self.bound_port,
+                'connected': bool(self._last_report and now - self._last_report <= 90),
+                'last_report': self._last_report, 'version': self._extension_version,
+                'expected': '1.7.0', 'readers': readers,
+                'rejected': self._notified_reject > self._last_report,
+            }
+
     def note_activity(self):
         """Log once per run when the extension successfully connects."""
         if self._notified_activity:

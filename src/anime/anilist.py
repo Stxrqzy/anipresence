@@ -342,6 +342,15 @@ class AniListClient:
         data = self._query(_USER_LIST_QUERY, {"name": username})
         return self._parse_list_collection(data)
 
+    def fetch_viewer(self):
+        """Identify the account that owns this token."""
+        if not self._access_token:
+            raise AniListError("AniList access token is not configured")
+        viewer = (self._query("query { Viewer { id name } }", {}) or {}).get("Viewer") or {}
+        if not viewer.get("id") or not viewer.get("name"):
+            raise AniListError("AniList token did not authenticate an account")
+        return viewer
+
     def fetch_viewer_list(self):
         """Fetch the authenticated viewer's own list (token required).
 
@@ -350,9 +359,7 @@ class AniListClient:
         two-way sync. Returns ``(entries, viewer_name)`` where *entries* has the
         same shape as :meth:`fetch_user_list`.
         """
-        if not self._access_token:
-            raise AniListError("AniList access token is not configured")
-        viewer = (self._query("query { Viewer { id name } }", {}) or {}).get("Viewer") or {}
+        viewer = self.fetch_viewer()
         user_id = viewer.get("id")
         if not user_id:
             raise AniListError("AniList token did not authenticate an account")

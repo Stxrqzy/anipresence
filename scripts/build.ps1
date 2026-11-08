@@ -24,4 +24,11 @@ if (-not (Test-Path -LiteralPath $iscc)) { throw "ISCC.exe not found at $iscc" }
 
 & $iscc "/DMyAppVersion=$version" AniPresence.iss
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed (exit $LASTEXITCODE)" }
+$installer = "installer\AniPresence-Setup-$version.exe"
+$feed = @{
+    version = $version
+    url = "https://github.com/Stxrqzy/anipresence/releases/download/v$version/AniPresence-Setup-$version.exe"
+    sha256 = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+} | ConvertTo-Json
+[System.IO.File]::WriteAllText((Join-Path $repo "installer\update.json"), $feed)
 Write-Host ">> Done: installer\AniPresence-Setup-$version.exe"

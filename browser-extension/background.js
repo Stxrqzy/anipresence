@@ -38,6 +38,7 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
       title: isTop ? msg.title : existing.payload.title,
       episode: isTop ? (msg.episode ?? null) : existing.payload.episode,
       episodeTitle: isTop ? (msg.episodeTitle || '') : existing.payload.episodeTitle,
+      readerVersion: isTop ? (msg.readerVersion || '') : existing.payload.readerVersion,
       visibility: isTop ? msg.visibility : existing.payload.visibility,
       focused: isTop ? msg.focused : existing.payload.focused,
       video: hasVideo ? msg.video : existing.payload.video,
@@ -127,7 +128,7 @@ async function flush() {
       "Content-Type": "application/json",
       "X-AniPresence-Token": config.bridgeToken || "",
     },
-    body: JSON.stringify({ tabs: live, at: now }),
+    body: JSON.stringify({ tabs: live, at: now, extensionVersion: chrome.runtime.getManifest().version }),
     keepalive: true,
   }).catch(() => {
     // Desktop app not running (or the port is closed). Nothing to do here;
