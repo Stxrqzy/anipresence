@@ -43,6 +43,8 @@ class Config:
     min_match_score: float = 60.0
     theme: str = "dark"
     ui_layout: str = "modern"       # "modern" | "classic"
+    glass_effects: bool = True
+    smooth_animations: bool = True
     accent: str = "#7c5cff"
     auto_accent: bool = True     # sample the accent from the current cover art
     compact: bool = False

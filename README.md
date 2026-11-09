@@ -54,6 +54,10 @@ from the page title.
   focused Now Playing card and streamlined actions. Switch instantly under
   **Settings → Appearance → Use modern interface**; turn it off for the original
   tabbed layout. Both layouts support dark/light themes and AniList browser login.
+- **Glass & motion** — translucent panels, soft accent lighting and fine edge
+  highlights in both layouts. Navigation uses a short snapshot transition, and
+  playback progress eases between updates. Both effects can be disabled in
+  **Settings → Appearance**.
 - **Watch anything** — force a presence for anything AniPresence can't detect
   (non-anime sites, movies, games) with a title/episode/website dialog.
 - **Continue watching** — a *Next episode* button opens the next episode of the
@@ -304,6 +308,13 @@ moves the general controls, account selector and PWA launcher into Settings;
 extra Now Playing actions are under **More actions**. The sidebar becomes an
 icon rail on narrow windows; hover an icon for its page name.
 
+**Glass and animations**: Settings → Appearance has independent switches for
+**Glass panels & soft accent lighting** and **Smooth page transitions & playback
+progress**. Glass works in both layouts and themes, even without Windows Mica or
+cover art. Cinematic mode adds the blurred cover behind the translucent panels.
+Animations use a captured frame so large settings pages and charts do not need
+to repaint every animation frame. Turning animations off applies immediately.
+
 **Accent color & theme**: in Settings → Appearance (the header in Classic),
 pick a preset from the dropdown next to the theme
 selector, or choose **Custom color…** to open the picker (either pins the color
@@ -406,6 +417,8 @@ defaults). All keys:
 | `min_match_score` | `60` | Fuzzy-match confidence floor (logging only) |
 | `theme` | `"dark"` | Interface theme: `dark`, `light`, or `system` (follows Windows light/dark) |
 | `ui_layout` | `"modern"` | Interface layout: `modern` sidebar or `classic` tabs; switch live in Settings → Appearance |
+| `glass_effects` | `true` | Translucent glass panels and soft accent-colored background lighting |
+| `smooth_animations` | `true` | Short page transitions and smoothly updated playback progress |
 | `accent` | `"#7c5cff"` | Accent color as a hex string |
 | `auto_accent` | `true` | Sample the accent color from the current cover art |
 | `compact` | `false` | Compact layout (tighter spacing/padding) |
@@ -479,8 +492,11 @@ browser. The panel also reports token mismatches and disconnected extensions.
 
 ### Automatic update checks and downloads
 
-Settings → Other Settings → App updates checks on startup and every six hours,
-notifies you when a newer stable version exists, and offers **Download installer**
+Update checks begin as soon as the app opens, run in the background, and repeat
+every six hours. When a newer stable version exists, a banner appears in the
+window; **View update** jumps directly to Settings → Other Settings → App updates.
+You can disable automatic checks there or re-enable them to check immediately.
+The update controls offer **Download installer**
 with progress followed by **Install update**. Install launches setup and quits the
 running app. Downloads go to `%APPDATA%\AniPresence\updates` and are checked against
 the feed's SHA-256 digest when one is supplied.

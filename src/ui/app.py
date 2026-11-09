@@ -920,7 +920,7 @@ class MainWindow(QMainWindow):
         self._load_toggles_from_config()
         self._build_tray()
         self.show_placeholder()
-        self._apply_backdrop()
+        self._apply_stylesheet()
         self._install_resize_filter()
         self._restore_window_state()
         self._system_refresh.start()
@@ -932,7 +932,10 @@ class MainWindow(QMainWindow):
         self._update_timer.setInterval(6 * 60 * 60 * 1000)
         self._update_timer.timeout.connect(self._auto_check_updates)
         self._update_timer.start()
-        QTimer.singleShot(10000, self._auto_check_updates)
+        self._startup_update_timer = QTimer(self)
+        self._startup_update_timer.setSingleShot(True)
+        self._startup_update_timer.timeout.connect(self._auto_check_updates)
+        self._startup_update_timer.start(0)
 
     # ----------------------------------------------------------------- tray
     def _build_tray(self):
@@ -1224,7 +1227,9 @@ class MainWindow(QMainWindow):
         compact = bool(self.cfg.data.compact)
         self._gap = 8 if compact else 12
         self._pad = 10 if compact else 15
-        central = QWidget()
+        from .effects import GlassBackground
+        central = GlassBackground()
+        central.configure(self.cfg.data.glass_effects, self._applied_theme, self.cfg.data.accent)
         self._layout_mode = None
         self._control_grid_mode = None
         outer = QVBoxLayout(central)
@@ -1337,6 +1342,18 @@ class MainWindow(QMainWindow):
             header.addWidget(btn)
         # Keep the title bar pinned above the scrollable body.
         outer.insertWidget(0, self.title_bar)
+        self._update_banner = QFrame()
+        self._update_banner.setObjectName("updateBanner")
+        banner_row = QHBoxLayout(self._update_banner)
+        banner_row.setContentsMargins(18, 10, 18, 10)
+        self._update_banner_label = QLabel()
+        self._update_banner_label.setWordWrap(True)
+        banner_row.addWidget(self._update_banner_label, 1)
+        view_update = QPushButton("View update")
+        view_update.clicked.connect(self._show_update_settings)
+        banner_row.addWidget(view_update)
+        outer.addWidget(self._update_banner)
+        self._update_banner.hide()
 
         # Chrome-style top-level tabs: the main dashboard, recently-watched and
         # the log each get their own tab; switching tabs swaps the whole page.
@@ -1472,6 +1489,7 @@ class MainWindow(QMainWindow):
         self._place_cover_spinner()
 
         self._classic_actions = QWidget()
+        self._classic_actions.setObjectName("surfaceContent")
         button_col = QVBoxLayout(self._classic_actions)
         button_col.setContentsMargins(0, 0, 0, 0)
         self._classic_action_layout = button_col
@@ -1567,6 +1585,9 @@ class MainWindow(QMainWindow):
         info.addSpacing(6)
         self.progress = QProgressBar()
         self.progress.setRange(0, 1000)
+        self._progress_animation = QPropertyAnimation(self.progress, b"value", self.progress)
+        self._progress_animation.setDuration(320)
+        self._progress_animation.setEasingCurve(QEasingCurve.OutCubic)
         info.addWidget(self.progress)
 
         time_row = QHBoxLayout()
@@ -1856,6 +1877,7 @@ class MainWindow(QMainWindow):
             action.setEnabled(button.isEnabled())
 
     def _on_layout_changed(self, enabled):
+        self._tab_anim_stop()
         self.cfg.set(ui_layout="modern" if enabled else "classic")
         self._apply_ui_layout()
         self._apply_stylesheet()
@@ -1874,6 +1896,8 @@ class MainWindow(QMainWindow):
         self._modern_actions.setVisible(modern)
         self._quick_controls.setVisible(modern)
         self._appearance_colors.setVisible(modern)
+        self._subtitle_label.setText("Your anime. Your presence." if modern else
+                                     "Chrome → AniList → Discord Rich Presence")
         self._now_card_layout.removeWidget(self._now_info)
         self._now_top_row.removeWidget(self._now_info)
         if modern:
@@ -2291,6 +2315,14 @@ class MainWindow(QMainWindow):
         self.modern_ui_check.setToolTip("Switch instantly between Modern and Classic. Your activity stays running.")
         self.modern_ui_check.toggled.connect(self._on_layout_changed)
         appearance_layout.addWidget(self.modern_ui_check)
+        self.glass_check = QCheckBox("Glass panels && soft accent lighting")
+        self.glass_check.setChecked(self.cfg.data.glass_effects)
+        self.glass_check.toggled.connect(self._on_glass_changed)
+        appearance_layout.addWidget(self.glass_check)
+        self.animations_check = QCheckBox("Smooth page transitions && playback progress")
+        self.animations_check.setChecked(self.cfg.data.smooth_animations)
+        self.animations_check.toggled.connect(self._on_animations_changed)
+        appearance_layout.addWidget(self.animations_check)
         hint = QLabel("A focused dashboard and sidebar navigation. Turn off to return to the classic layout.")
         hint.setWordWrap(True)
         hint.setObjectName("subLabel")
@@ -2614,7 +2646,7 @@ class MainWindow(QMainWindow):
         mm.addWidget(self._field_label("App updates"))
         self.auto_updates_check = QCheckBox("Check for updates on startup and every 6 hours")
         self.auto_updates_check.setChecked(self.cfg.data.auto_check_updates)
-        self.auto_updates_check.toggled.connect(lambda on: self.cfg.set(auto_check_updates=on))
+        self.auto_updates_check.toggled.connect(self._on_auto_updates_changed)
         mm.addWidget(self.auto_updates_check)
         self.update_feed_edit = QLineEdit(self.cfg.data.update_feed_url)
         self.update_feed_edit.setPlaceholderText("HTTPS release feed or GitHub latest-release API URL")
@@ -3278,49 +3310,36 @@ class MainWindow(QMainWindow):
 
     def _on_tab_changed(self, index):
         self._tab_anim_stop()
+        snapshot = (self.stack.grab() if self.isVisible() and self.cfg.data.smooth_animations
+                    and self.stack.currentIndex() != index else None)
         self.stack.setCurrentIndex(index)
         self._sync_navigation(index)
         if index == self._stats_tab_index:
             self._refresh_stats()
         if index == self._library_tab_index:
             self._on_refresh_library()
-        self._animate_tab_in(self.stack.currentWidget())
+        self._animate_tab_in(self.stack.currentWidget(), snapshot)
 
-    def _animate_tab_in(self, widget):
-        """Fade the incoming tab in from transparent (skipped pre-show).
-
-        Heavy pages (charts, long lists, settings) repaint too slowly for a
-        full-widget opacity fade to stay at 60fps, so they switch instantly
-        while lightweight tabs get a quick, crisp fade.
-        """
-        if not self.isVisible():
+    def _animate_tab_in(self, widget, snapshot=None):
+        if snapshot is None or not self.isVisible() or not self.cfg.data.smooth_animations:
             return
-        if widget in (self._stats_page, self._settings_page, self._library_page):
-            return
-        effect = QGraphicsOpacityEffect(widget)
-        widget.setGraphicsEffect(effect)
-        anim = QPropertyAnimation(effect, b"opacity", self)
-        anim.setDuration(120)
-        anim.setStartValue(0.0)
-        anim.setEndValue(1.0)
-        anim.setEasingCurve(QEasingCurve.OutCubic)
-        anim.finished.connect(lambda: self._finish_tab_anim(widget, anim))
-        anim.start()
-        self._tab_anim = anim  # keep a ref so GC can't kill it mid-flight
-
-    def _finish_tab_anim(self, widget, anim):
-        """Drop the transient opacity effect once the fade completes."""
-        if getattr(self, "_tab_anim", None) is anim:
-            self._tab_anim = None
-        if widget.graphicsEffect() is not None:
-            widget.setGraphicsEffect(None)  # Qt takes ownership and deletes it
-        anim.deleteLater()
+        from .effects import PageTransition
+        overlay = PageTransition(self.stack, snapshot)
+        self._tab_overlay = overlay
+        self._tab_anim = overlay.animation
+        overlay.animation.finished.connect(self._tab_anim_stop)
+        overlay.animation.start()
 
     def _tab_anim_stop(self):
         anim = getattr(self, "_tab_anim", None)
         if anim is not None:
             anim.stop()
             self._tab_anim = None
+        overlay = getattr(self, "_tab_overlay", None)
+        if overlay is not None:
+            self._tab_overlay = None
+            overlay.hide()
+            overlay.deleteLater()
 
     def _on_recent_also_stats(self, _entries):
         """Keep the Stats tab live while it's the active tab."""
@@ -3467,22 +3486,39 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ handlers
     def _apply_stylesheet(self):
+        self._tab_anim_stop()
         self._applied_theme = resolve_theme(self.cfg.data.theme)
         from .modern import modern_qss
+        from .effects import glass_qss
+        self.centralWidget().configure(self.cfg.data.glass_effects, self._applied_theme, self.cfg.data.accent)
         QApplication.instance().setStyleSheet(
             build_theme_qss(
                 self._applied_theme,
                 self.cfg.data.accent,
                 self.cfg.data.compact,
-                self.cfg.data.mica_backdrop or self.cfg.data.cinematic_backdrop,
+                self.cfg.data.mica_backdrop or self.cfg.data.cinematic_backdrop or self.cfg.data.glass_effects,
             ) + (modern_qss(self._applied_theme, self.cfg.data.accent)
                  if self.cfg.data.ui_layout == "modern" else "")
+            + (glass_qss(self._applied_theme, self.cfg.data.accent) if self.cfg.data.glass_effects else "")
         )
         self._sync_navigation(self.tabbar.currentIndex())
         if self._cover_spinner is not None:
             self._cover_spinner.set_color(self.cfg.data.accent)
         self._apply_backdrop()
         self._update_ambient()
+
+    def _on_glass_changed(self, enabled):
+        self.cfg.set(glass_effects=enabled)
+        self._apply_stylesheet()
+
+    def _on_animations_changed(self, enabled):
+        self.cfg.set(smooth_animations=enabled)
+        if not enabled:
+            self._tab_anim_stop()
+            if self._progress_animation.state() == QAbstractAnimation.Running:
+                target = self._progress_animation.endValue()
+                self._progress_animation.stop()
+                self.progress.setValue(target)
 
     def _maybe_resync_system_theme(self):
         """Live-follow Windows light/dark mode when the 'System' theme is active."""
@@ -3819,6 +3855,7 @@ class MainWindow(QMainWindow):
         if payload.get("clear"):
             self.show_placeholder()
             return
+        previous = self._current_payload or {}
         self._current_payload = payload
         if self._match_panel_url and self._match_panel_url != payload.get("url"):
             self._hide_match_chooser()
@@ -3855,9 +3892,18 @@ class MainWindow(QMainWindow):
         duration = float(payload.get("duration") or 0)
         current = float(payload.get("current_time") or 0)
         if duration > 0:
-            self.progress.setValue(int(min(1000, 1000 * current / duration)))
+            target = int(max(0, min(1000, 1000 * current / duration)))
         else:
-            self.progress.setValue(0)
+            target = 0
+        self._progress_animation.stop()
+        if (self.cfg.data.smooth_animations and self.progress.isVisible()
+                and previous.get("url") == payload.get("url") and previous
+                and abs(target - self.progress.value()) < 150):
+            self._progress_animation.setStartValue(self.progress.value())
+            self._progress_animation.setEndValue(target)
+            self._progress_animation.start()
+        else:
+            self.progress.setValue(target)
 
         self.time_cur.setText(format_seconds(current))
         self.time_total.setText(format_seconds(duration))
@@ -4369,6 +4415,11 @@ class MainWindow(QMainWindow):
         if self.cfg.data.auto_check_updates and self._update_state.get('stage') != 'downloaded':
             self._check_for_updates()
 
+    def _on_auto_updates_changed(self, enabled):
+        self.cfg.set(auto_check_updates=enabled)
+        if enabled:
+            self._auto_check_updates()
+
     def _on_update_status(self, result):
         self._update_state = result
         if result.get('stage') not in ('checking', 'downloading'):
@@ -4383,6 +4434,12 @@ class MainWindow(QMainWindow):
         self.update_check_btn.setEnabled(not self._update_busy)
         self.update_download_btn.setEnabled(not self._update_busy and bool((state.get('release') or {}).get('url')))
         self.update_install_btn.setEnabled(state.get('stage') == 'downloaded')
+        self._update_banner_label.setText(state.get('message') or '')
+        self._update_banner.setVisible(state.get('stage') in ('available', 'downloaded'))
+
+    def _show_update_settings(self):
+        self.tabbar.setCurrentIndex(self._settings_tab_index)
+        self._settings_page.ensureWidgetVisible(self.update_status_label, 0, 50)
 
     def _download_update(self):
         import threading
@@ -4625,6 +4682,7 @@ class MainWindow(QMainWindow):
             )
 
     def resizeEvent(self, event):  # noqa: N802 (Qt naming)
+        self._tab_anim_stop()
         self._update_header_for_width()
         self._update_cover_size()
         QTimer.singleShot(0, self._update_cover_size)
@@ -4972,7 +5030,7 @@ class MainWindow(QMainWindow):
             return
         try:
             handle = int(self.winId())
-            dark = 1 if self.cfg.data.theme != "light" else 0
+            dark = 1 if self._applied_theme != "light" else 0
             attr = ctypes.windll.dwmapi.DwmSetWindowAttribute
             attr.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_void_p, ctypes.c_int]
             dark_var = ctypes.c_int(dark)
@@ -5050,6 +5108,7 @@ class MainWindow(QMainWindow):
         super().showEvent(event)
 
     def show_placeholder(self):
+        self._progress_animation.stop()
         self._current_payload = None
         self.anime_title.setText("No anime detected")
         self.episode_label.setText("WATCHING A VIDEO IS ALL IT TAKES")
