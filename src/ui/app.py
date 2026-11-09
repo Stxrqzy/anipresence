@@ -1067,6 +1067,12 @@ class MainWindow(QMainWindow):
     def _update_header_for_width(self):
         """Tuck header elements away on narrow windows so nothing gets clipped."""
         w = self.width()
+        if hasattr(self, "_sidebar"):
+            narrow = w < 900
+            self._sidebar.setFixedWidth(68 if narrow else 170)
+            for button, name in zip(self._nav_buttons, self._page_names):
+                button.setText("" if narrow else name)
+            self._reflow_controls()
         if w < 820 and not self._header_hid_chips:
             self.chrome_chip.hide()
             self.discord_chip.hide()
@@ -1219,6 +1225,8 @@ class MainWindow(QMainWindow):
         self._gap = 8 if compact else 12
         self._pad = 10 if compact else 15
         central = QWidget()
+        self._layout_mode = None
+        self._control_grid_mode = None
         outer = QVBoxLayout(central)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
@@ -1243,6 +1251,7 @@ class MainWindow(QMainWindow):
         self.title_bar = _ChromeTitleBar()
         self.title_bar.setObjectName("titlebar")
         header = QHBoxLayout(self.title_bar)
+        self._header_layout = header
         header.setContentsMargins(16, 8, 16, 2)
         header.setSpacing(12)
 
@@ -1293,7 +1302,7 @@ class MainWindow(QMainWindow):
         title_col.addWidget(title)
         title_col.addWidget(subtitle)
         title_col.addWidget(self._version_label)
-        header.addLayout(title_col)
+        header.addLayout(title_col, 1)
         header.addStretch(1)
 
         self.chrome_chip = QLabel(
@@ -1333,13 +1342,14 @@ class MainWindow(QMainWindow):
         # the log each get their own tab; switching tabs swaps the whole page.
         self.tabbar = QTabBar()
         self.tabbar.setDrawBase(False)
-        tab_row = QHBoxLayout()
+        self._tabs_host = QWidget()
+        tab_row = QHBoxLayout(self._tabs_host)
         tab_row.setContentsMargins(0, 6, 0, 0)
         tab_row.setSpacing(0)
         tab_row.addStretch(1)
         tab_row.addWidget(self.tabbar)
         tab_row.addStretch(1)
-        outer.addLayout(tab_row)
+        outer.addWidget(self._tabs_host)
         self.stack = QStackedWidget()
 
         # "Main" tab: the dashboard scrolls independently so every control stays
@@ -1419,9 +1429,10 @@ class MainWindow(QMainWindow):
         self.tabbar.addTab("Log")
         self._settings_tab_index = self.tabbar.count() - 2
         self.tabbar.currentChanged.connect(self._on_tab_changed)
-        outer.addWidget(self.stack, 1)
+        self._build_navigation_shell(outer)
 
         left = QHBoxLayout()          # dashboard row: left column | controls
+        self._dashboard_row = left
         left.setContentsMargins(0, 0, 0, 0)
         left.setSpacing(self._gap)
         dash_root = QVBoxLayout(dashboard)
@@ -1430,6 +1441,7 @@ class MainWindow(QMainWindow):
         dash_root.addLayout(left, 1)
 
         left_col = QVBoxLayout()      # card on top, live presence preview below
+        self._now_column = left_col
         left_col.setContentsMargins(0, 0, 0, 0)
         left_col.setSpacing(self._gap)
         left.addLayout(left_col, 5)
@@ -1439,11 +1451,13 @@ class MainWindow(QMainWindow):
         card.setMinimumWidth(420)
         self._left_pane = card
         card_layout = QVBoxLayout(card)
+        self._now_card_layout = card_layout
         card_layout.setContentsMargins(self._pad, self._pad, self._pad, self._pad)
         card_layout.setSpacing(14)
 
         # Top row: cover on the left, every action button to its right.
         top_row = QHBoxLayout()
+        self._now_top_row = top_row
         top_row.setSpacing(18)
 
         self.cover_label = QLabel()
@@ -1457,7 +1471,10 @@ class MainWindow(QMainWindow):
         self._cover_spinner.hide()
         self._place_cover_spinner()
 
-        button_col = QVBoxLayout()
+        self._classic_actions = QWidget()
+        button_col = QVBoxLayout(self._classic_actions)
+        button_col.setContentsMargins(0, 0, 0, 0)
+        self._classic_action_layout = button_col
         button_col.setSpacing(8)
         self.open_site_btn = QPushButton("Open Site")
         self.open_site_btn.setObjectName("ghost")
@@ -1505,13 +1522,19 @@ class MainWindow(QMainWindow):
             _btn.setMinimumWidth(132)
             button_col.addWidget(_btn)
         button_col.addStretch(1)
-        top_row.addLayout(button_col, 0)
+        top_row.addWidget(self._classic_actions, 0)
         card_layout.addLayout(top_row)
 
         # Bottom section: title + playback bar, spanning the full card width.
-        info = QVBoxLayout()
+        self._now_info = QWidget()
+        self._now_info.setObjectName("surfaceContent")
+        self._now_info.setMinimumWidth(0)
+        info = QVBoxLayout(self._now_info)
+        info.setContentsMargins(0, 0, 0, 0)
+        self._now_info_layout = info
         info.setSpacing(7)
         self.episode_label = QLabel("")
+        self.episode_label.setWordWrap(True)
         self.episode_label.setObjectName("captionLabel")
         info.addWidget(self.episode_label)
 
@@ -1556,7 +1579,27 @@ class MainWindow(QMainWindow):
         time_row.addWidget(self.time_total)
         info.addLayout(time_row)
 
-        card_layout.addLayout(info)
+        card_layout.addWidget(self._now_info)
+        self._modern_actions = QWidget()
+        self._modern_actions.setObjectName("surfaceContent")
+        self._modern_actions.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        self._modern_action_row = QHBoxLayout(self._modern_actions)
+        self._modern_action_row.setContentsMargins(0, 8, 0, 0)
+        self._more_actions = QPushButton("More actions")
+        self._more_actions.setObjectName("ghost")
+        self._more_menu = QMenu(self._more_actions)
+        self._more_links = []
+        for button in (self.open_pwa_btn, self.open_anilist_btn, self.fix_match_btn,
+                       self.copy_url_btn, self.share_now_btn, self.share_tunnel_btn):
+            action = self._more_menu.addAction(button.text())
+            action.triggered.connect(lambda checked=False, b=button: b.click())
+            self._more_links.append((action, button))
+        self._more_menu.aboutToShow.connect(self._sync_more_actions)
+        self._more_actions.setMenu(self._more_menu)
+        self._modern_action_row.addStretch(1)
+        self._modern_action_row.addWidget(self._more_actions)
+        card_layout.addWidget(self._modern_actions)
+        self._modern_actions.hide()
         left_col.addWidget(card, 5)
 
         # Live mockup of the Discord activity card, updated in real time.
@@ -1564,6 +1607,7 @@ class MainWindow(QMainWindow):
 
         # Controls
         controls = QFrame()
+        self._controls_card = controls
         controls.setObjectName("controls")
         c_layout = QVBoxLayout(controls)
         c_layout.setContentsMargins(self._pad, (12 if not self.cfg.data.compact else 8), self._pad, self._pad)
@@ -1605,7 +1649,9 @@ class MainWindow(QMainWindow):
             self.cinematic_check, self.hide_adult_check,
             self.auto_accent_check,
         ]
+        self._control_boxes = boxes
         grid = QGridLayout()
+        self._controls_grid = grid
         grid.setSpacing(8)
         for i, cb in enumerate(boxes):
             grid.addWidget(cb, i // 2, i % 2)
@@ -1671,6 +1717,7 @@ class MainWindow(QMainWindow):
             "Each account's watch history loads from its own save file on switch."
         )
         account_hint.setObjectName("subLabel")
+        account_hint.setWordWrap(True)
         c_layout.addWidget(account_hint)
         self._populate_anilist_accounts()
 
@@ -1735,6 +1782,151 @@ class MainWindow(QMainWindow):
 
         # "Continue watching": recent titles you can jump straight back to.
         dash_root.addWidget(self._build_continue_strip())
+        self._quick_controls = QWidget()
+        self._quick_controls.setObjectName("surfaceContent")
+        self._quick_row = QHBoxLayout(self._quick_controls)
+        self._quick_row.setContentsMargins(4, 0, 4, 4)
+        self._quick_row.addStretch(1)
+        manual = QPushButton("Set activity…")
+        manual.setObjectName("ghost")
+        manual.clicked.connect(lambda: self.watch_any_btn.click())
+        self._quick_row.addWidget(manual)
+        dash_root.insertWidget(0, self._quick_controls)
+        self._apply_ui_layout()
+
+    def _build_navigation_shell(self, outer):
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+        self._sidebar = QFrame()
+        self._sidebar.setObjectName("sidebar")
+        nav = QVBoxLayout(self._sidebar)
+        nav.setContentsMargins(10, 18, 10, 16)
+        nav.setSpacing(6)
+        self._nav_buttons = []
+        self._page_names = ["Overview", "History", "Library", "Statistics", "Settings", "Activity log"]
+        self._page_descriptions = [
+            "Your anime, in the moment.", "Pick up where you left off.",
+            "Your AniList collection, all in one place.", "A little perspective on your watch time.",
+            "Make AniPresence feel like you.", "Connection and detection updates."]
+        for index, name in enumerate(self._page_names):
+            if index == 4:
+                nav.addStretch(1)
+            button = QPushButton(name)
+            button.setObjectName("navButton")
+            button.setCheckable(True)
+            button.setAutoExclusive(True)
+            button.setIconSize(QSize(18, 18))
+            button.setToolTip(name)
+            button.setAccessibleName(name)
+            button.clicked.connect(lambda checked=False, i=index: self.tabbar.setCurrentIndex(i))
+            nav.addWidget(button)
+            self._nav_buttons.append(button)
+        body.addWidget(self._sidebar)
+        content = QVBoxLayout()
+        content.setSpacing(0)
+        self._page_heading = QWidget()
+        heading = QVBoxLayout(self._page_heading)
+        heading.setContentsMargins(20, 20, 20, 16)
+        heading.setSpacing(4)
+        self._page_title = QLabel()
+        self._page_title.setObjectName("pageTitle")
+        self._page_description = QLabel()
+        self._page_description.setObjectName("pageDescription")
+        self._page_description.setWordWrap(True)
+        heading.addWidget(self._page_title)
+        heading.addWidget(self._page_description)
+        content.addWidget(self._page_heading)
+        content.addWidget(self.stack, 1)
+        body.addLayout(content, 1)
+        outer.addLayout(body, 1)
+        self._sync_navigation(0)
+
+    def _sync_navigation(self, index):
+        from .modern import navigation_icon
+        for i, button in enumerate(self._nav_buttons):
+            button.setChecked(i == index)
+            color = "#ffffff" if i == index else ("#657086" if self._applied_theme == "light" else "#a4aec3")
+            button.setIcon(navigation_icon(i, color))
+        self._page_title.setText(self._page_names[index])
+        self._page_description.setText(self._page_descriptions[index])
+
+    def _sync_more_actions(self):
+        for action, button in self._more_links:
+            action.setEnabled(button.isEnabled())
+
+    def _on_layout_changed(self, enabled):
+        self.cfg.set(ui_layout="modern" if enabled else "classic")
+        self._apply_ui_layout()
+        self._apply_stylesheet()
+
+    def _apply_ui_layout(self):
+        """Rearrange the existing widgets, preserving live state and callbacks."""
+        modern = self.cfg.data.ui_layout == "modern"
+        if self._layout_mode == modern:
+            return
+        self._layout_mode = modern
+        self.centralWidget().setObjectName("modernRoot" if modern else "classicRoot")
+        self._sidebar.setVisible(modern)
+        self._page_heading.setVisible(modern)
+        self._tabs_host.setVisible(not modern)
+        self._classic_actions.setVisible(not modern)
+        self._modern_actions.setVisible(modern)
+        self._quick_controls.setVisible(modern)
+        self._appearance_colors.setVisible(modern)
+        self._now_card_layout.removeWidget(self._now_info)
+        self._now_top_row.removeWidget(self._now_info)
+        if modern:
+            self._now_column.setAlignment(Qt.AlignTop)
+            self._left_pane.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+            self._now_info_layout.setAlignment(Qt.AlignVCenter)
+            self._settings_page.widget().layout().insertWidget(1, self._controls_card)
+            self._now_top_row.addWidget(self._now_info, 1)
+            self._modern_action_row.insertWidget(0, self.open_site_btn)
+            self._modern_action_row.insertWidget(1, self.next_ep_btn)
+            self._quick_row.insertWidget(0, self.rpc_check)
+            self._quick_row.insertWidget(1, self.detection_check)
+            self._appearance_colors.layout().addWidget(self.theme_combo)
+            self._appearance_colors.layout().addWidget(self.accent_combo)
+            self._left_pane.setMinimumWidth(0)
+        else:
+            self._now_column.setAlignment(Qt.AlignmentFlag(0))
+            self._left_pane.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+            self._now_info_layout.setAlignment(Qt.AlignmentFlag(0))
+            self._dashboard_row.addWidget(self._controls_card, 4)
+            self._now_card_layout.insertWidget(1, self._now_info)
+            self._classic_action_layout.insertWidget(0, self.open_site_btn)
+            self._classic_action_layout.insertWidget(4, self.next_ep_btn)
+            self._controls_grid.addWidget(self.rpc_check, 0, 0)
+            self._controls_grid.addWidget(self.detection_check, 0, 1)
+            index = self._header_layout.indexOf(self.win_min_btn)
+            self._header_layout.insertWidget(index, self.theme_combo)
+            self._header_layout.insertWidget(index + 1, self.accent_combo)
+            self._left_pane.setMinimumWidth(420)
+        # Reparented controls may have been hidden with their previous page.
+        for widget in (self._controls_card, self._now_info, self.open_site_btn,
+                       self.next_ep_btn, self.rpc_check, self.detection_check,
+                       self.theme_combo, self.accent_combo):
+            widget.show()
+        self.progress.setTextVisible(not modern)
+        self._update_header_for_width()
+        self._update_cover_size()
+        QTimer.singleShot(0, self._update_cover_size)
+
+    def _reflow_controls(self):
+        if not hasattr(self, "_control_boxes"):
+            return
+        modern = self.cfg.data.ui_layout == "modern"
+        columns = 1 if modern and self.width() < 760 else 2
+        key = (modern, columns)
+        if getattr(self, "_control_grid_mode", None) == key:
+            return
+        self._control_grid_mode = key
+        for checkbox in self._control_boxes:
+            self._controls_grid.removeWidget(checkbox)
+        boxes = self._control_boxes[2:] if modern else self._control_boxes
+        for i, checkbox in enumerate(boxes):
+            self._controls_grid.addWidget(checkbox, i // columns, i % columns)
 
     # ----------------------------------------------------- continue watching
     def _build_continue_strip(self):
@@ -2087,6 +2279,30 @@ class MainWindow(QMainWindow):
         layout.setSpacing(self._gap)
         page.setWidget(host)
         self._settings_page = page
+
+        appearance = QFrame()
+        appearance.setObjectName("card")
+        appearance_layout = QVBoxLayout(appearance)
+        appearance_layout.setContentsMargins(self._pad, self._pad, self._pad, self._pad)
+        appearance_layout.setSpacing(10)
+        appearance_layout.addWidget(self._field_label("APPEARANCE"))
+        self.modern_ui_check = QCheckBox("Use modern interface")
+        self.modern_ui_check.setChecked(self.cfg.data.ui_layout == "modern")
+        self.modern_ui_check.setToolTip("Switch instantly between Modern and Classic. Your activity stays running.")
+        self.modern_ui_check.toggled.connect(self._on_layout_changed)
+        appearance_layout.addWidget(self.modern_ui_check)
+        hint = QLabel("A focused dashboard and sidebar navigation. Turn off to return to the classic layout.")
+        hint.setWordWrap(True)
+        hint.setObjectName("subLabel")
+        appearance_layout.addWidget(hint)
+        self._appearance_colors = QWidget()
+        self._appearance_colors.setObjectName("surfaceContent")
+        colors = QHBoxLayout(self._appearance_colors)
+        colors.setContentsMargins(0, 0, 0, 0)
+        colors.addWidget(QLabel("Theme & accent"))
+        colors.addStretch(1)
+        appearance_layout.addWidget(self._appearance_colors)
+        layout.addWidget(appearance)
 
         # -- Global hotkeys -------------------------------------------------
         hotkeys = QFrame()
@@ -3063,6 +3279,7 @@ class MainWindow(QMainWindow):
     def _on_tab_changed(self, index):
         self._tab_anim_stop()
         self.stack.setCurrentIndex(index)
+        self._sync_navigation(index)
         if index == self._stats_tab_index:
             self._refresh_stats()
         if index == self._library_tab_index:
@@ -3251,14 +3468,17 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------ handlers
     def _apply_stylesheet(self):
         self._applied_theme = resolve_theme(self.cfg.data.theme)
+        from .modern import modern_qss
         QApplication.instance().setStyleSheet(
             build_theme_qss(
                 self._applied_theme,
                 self.cfg.data.accent,
                 self.cfg.data.compact,
                 self.cfg.data.mica_backdrop or self.cfg.data.cinematic_backdrop,
-            )
+            ) + (modern_qss(self._applied_theme, self.cfg.data.accent)
+                 if self.cfg.data.ui_layout == "modern" else "")
         )
+        self._sync_navigation(self.tabbar.currentIndex())
         if self._cover_spinner is not None:
             self._cover_spinner.set_color(self.cfg.data.accent)
         self._apply_backdrop()
@@ -3377,6 +3597,14 @@ class MainWindow(QMainWindow):
             self._rebuilding = False
 
     def _do_rebuild(self):
+        current_tab = self.tabbar.currentIndex()
+        log_text = self.log_view.toPlainText()
+        login_status = self.anilist_login_status.text()
+        draft_fields = {name: getattr(self, name).text() for name in (
+            "anilist_secret_edit", "anilist_client_edit", "anilist_token_edit",
+            "pwa_url_edit", "update_feed_edit", "app_id_edit")}
+        chips = [(chip.text(), chip.objectName()) for chip in (self.chrome_chip, self.discord_chip)]
+        self._tab_anim_stop()
         for sig in (self.bridge.chrome_status, self.bridge.discord_status,
                     self.bridge.detection, self.bridge.recent, self.bridge.log,
                     self.bridge.stats_imported, self.bridge.account_avatar,
@@ -3391,6 +3619,17 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._connect_signals()
         self._load_toggles_from_config()
+        self.log_view.setPlainText(log_text)
+        self.anilist_login_status.setText(login_status)
+        for name, text in draft_fields.items():
+            with QSignalBlocker(getattr(self, name)):
+                getattr(self, name).setText(text)
+        for chip, (text, object_name) in zip((self.chrome_chip, self.discord_chip), chips):
+            chip.setText(text)
+            chip.setObjectName(object_name)
+            chip.style().unpolish(chip)
+            chip.style().polish(chip)
+        self.tabbar.setCurrentIndex(current_tab)
         if getattr(self, "_last_recent", None) is not None:
             self._on_recent(self._last_recent)
         if self._current_payload:
@@ -4371,6 +4610,8 @@ class MainWindow(QMainWindow):
         base = 210 if self.cfg.data.compact else 260
         reserve = 165 if self.cfg.data.compact else 165
         width = min(base, max(70, avail - reserve))
+        if self.cfg.data.ui_layout == "modern":
+            width = max(90, min(190 if not self.cfg.data.compact else 150, avail // 3))
         height = round(width * 7 / 5)
         if self.cover_label.width() == width:
             return
@@ -4386,6 +4627,7 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event):  # noqa: N802 (Qt naming)
         self._update_header_for_width()
         self._update_cover_size()
+        QTimer.singleShot(0, self._update_cover_size)
         self._update_ambient()
         super().resizeEvent(event)
 

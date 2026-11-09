@@ -50,6 +50,10 @@ from the page title.
   paused state when paused, auto-launches Chrome with the debugging flag.
 - **Desktop UI** — dark PySide6 window with live status, cover art, progress
   bar, controls, recently-watched history and a log panel.
+- **Modern or Classic** — the new default layout has sidebar navigation, a
+  focused Now Playing card and streamlined actions. Switch instantly under
+  **Settings → Appearance → Use modern interface**; turn it off for the original
+  tabbed layout. Both layouts support dark/light themes and AniList browser login.
 - **Watch anything** — force a presence for anything AniPresence can't detect
   (non-anime sites, movies, games) with a title/episode/website dialog.
 - **Continue watching** — a *Next episode* button opens the next episode of the
@@ -71,7 +75,8 @@ from the page title.
   Controls (or pick a manual accent) to pin a fixed color.
 - **Accent presets** — a curated palette (Spring Bloom, Summer Sunset, Autumn
   Ember, Winter Frost, Cherry Blossom, Midnight Violet, Ocean Depths, Forest
-  Dew) sits in the header; pick a preset or "Custom color…" for any color.
+  Dew) is available in Settings → Appearance (the header in Classic); pick a
+  preset or "Custom color…" for any color.
 - **Continue watching** — the dashboard shows a strip of titles you've watched
   before with a one-click *Resume Ep N* jump straight back to the last spot
   (covers and tooltips included; the current show is hidden from the strip).
@@ -292,7 +297,15 @@ totals. Covers are cached in `%APPDATA%\AniPresence\covers\`.
 
 **Privacy mode** strips URLs out of the on-screen log (and recent tooltips).
 
-**Accent color & theme**: pick a preset from the dropdown next to the theme
+**Interface layout**: **Settings → Appearance → Use modern interface** switches
+between Modern (default) and Classic without restarting. Playback, the current
+page, unsaved fields, and active login/download operations stay intact. Modern
+moves the general controls, account selector and PWA launcher into Settings;
+extra Now Playing actions are under **More actions**. The sidebar becomes an
+icon rail on narrow windows; hover an icon for its page name.
+
+**Accent color & theme**: in Settings → Appearance (the header in Classic),
+pick a preset from the dropdown next to the theme
 selector, or choose **Custom color…** to open the picker (either pins the color
 and disables auto accent). With **Auto accent from cover art** enabled, the
 accent follows the current show's key art instead. The theme can be `Dark`,
@@ -392,6 +405,7 @@ defaults). All keys:
 | `hide_when_no_video` | `true` | Clear the presence when nothing is playing |
 | `min_match_score` | `60` | Fuzzy-match confidence floor (logging only) |
 | `theme` | `"dark"` | Interface theme: `dark`, `light`, or `system` (follows Windows light/dark) |
+| `ui_layout` | `"modern"` | Interface layout: `modern` sidebar or `classic` tabs; switch live in Settings → Appearance |
 | `accent` | `"#7c5cff"` | Accent color as a hex string |
 | `auto_accent` | `true` | Sample the accent color from the current cover art |
 | `compact` | `false` | Compact layout (tighter spacing/padding) |

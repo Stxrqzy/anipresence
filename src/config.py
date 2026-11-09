@@ -42,6 +42,7 @@ class Config:
     hide_when_no_video: bool = True
     min_match_score: float = 60.0
     theme: str = "dark"
+    ui_layout: str = "modern"       # "modern" | "classic"
     accent: str = "#7c5cff"
     auto_accent: bool = True     # sample the accent from the current cover art
     compact: bool = False
@@ -96,6 +97,8 @@ class ConfigManager:
             self.data = Config(**valid)
         except (json.JSONDecodeError, TypeError, ValueError):
             return
+        if self.data.ui_layout not in ("modern", "classic"):
+            self.data.ui_layout = "modern"
         # Pre-wizard configs (no onboarding key) are treated as already done so
         # upgrading users never see the first-run wizard.
         if "onboarding_complete" not in raw:
