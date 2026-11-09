@@ -15,13 +15,14 @@ from urllib.parse import urlsplit
 
 from PySide6.QtCore import (
     QAbstractNativeEventFilter, QAbstractAnimation, QEasingCurve, QEvent, QPoint,
-    QPropertyAnimation, QRect, QRectF, QSignalBlocker, QSize, Qt, QTimer, QUrl,
+    QPropertyAnimation, QRect, QRectF, QMargins, QSignalBlocker, QSize, Qt, QTimer, QUrl,
 )
 from PySide6.QtGui import (
     QBrush, QColor, QIcon, QImage, QLinearGradient, QPainter, QPen, QPixmap,
     QRadialGradient,
 )
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
+from .anime_list import AnimeList, DETAIL_ROLE
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QColorDialog, QComboBox, QDialog, QDialogButtonBox,
     QFormLayout, QFrame, QGraphicsOpacityEffect, QGridLayout, QHBoxLayout,
@@ -355,6 +356,11 @@ def build_theme_qss(theme="dark", accent="", compact=False, mica=False):
     qss = qss.replace("#6a49e8", base)
     qss = qss.replace("124, 92, 255", "{}, {}, {}".format(*base_qrgb(accent)))
     qss += CHROME_QSS
+    qss += """
+    QListWidget#animeList { padding: 6px; outline: none; }
+    QListWidget#animeList::item { padding: 0; margin: 0; border: none; border-radius: 8px; }
+    QListWidget#animeList::item:focus { outline: none; border: none; }
+    """
     if compact:
         qss += COMPACT_EXTRA
     if mica:
@@ -468,10 +474,10 @@ def _version_tuple(text):
 def app_icon(size=64, accent="#7c5cff"):
     """Window/tray icon: the app logo, falling back to the "AP" monogram."""
     try:
-        from ..logo import logo_pixmap
-        pm = logo_pixmap(size)
-        if pm is not None:
-            return QIcon(pm)
+        from ..logo import logo_icon
+        icon = logo_icon(size)
+        if not icon.isNull():
+            return icon
     except Exception:  # noqa: BLE001 - never let the icon break the app
         pass
     base, hover, pressed = _accent_variants(accent)
@@ -1076,6 +1082,7 @@ class MainWindow(QMainWindow):
             for button, name in zip(self._nav_buttons, self._page_names):
                 button.setText("" if narrow else name)
             self._reflow_controls()
+            self._update_layout_spacing()
         if w < 820 and not self._header_hid_chips:
             self.chrome_chip.hide()
             self.discord_chip.hide()
@@ -1232,6 +1239,7 @@ class MainWindow(QMainWindow):
         central.configure(self.cfg.data.glass_effects, self._applied_theme, self.cfg.data.accent)
         self._layout_mode = None
         self._control_grid_mode = None
+        self._stats_grid_columns = None
         outer = QVBoxLayout(central)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
@@ -1401,7 +1409,7 @@ class MainWindow(QMainWindow):
         clear_history_btn.clicked.connect(self._on_clear_history)
         recent_header.addWidget(clear_history_btn)
         recent_layout.addLayout(recent_header)
-        self.recent_list = QListWidget()
+        self.recent_list = AnimeList()
         self.recent_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.recent_list.setIconSize(QSize(38, 53))
         recent_layout.addWidget(self.recent_list, 1)
@@ -1817,6 +1825,7 @@ class MainWindow(QMainWindow):
 
     def _build_navigation_shell(self, outer):
         body = QHBoxLayout()
+        self._body_layout = body
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
         self._sidebar = QFrame()
@@ -1936,6 +1945,34 @@ class MainWindow(QMainWindow):
         self._update_header_for_width()
         self._update_cover_size()
         QTimer.singleShot(0, self._update_cover_size)
+
+    def _update_layout_spacing(self):
+        if not hasattr(self, "_body_layout"):
+            return
+        modern = self.cfg.data.ui_layout == "modern"
+        compact = self.cfg.data.compact
+        inset = (8 if self.width() < 760 else 12 if compact else 16) if modern else 0
+        self._body_layout.setContentsMargins(inset, 6 if modern else 0, inset, inset)
+        gutter = (12 if self.width() < 760 or compact else 20) if modern else (14 if compact else 16)
+        self._page_heading.layout().setContentsMargins(gutter, 12, 0, 18)
+        for i in range(self.stack.count()):
+            page = self.stack.widget(i)
+            host = page.widget() if isinstance(page, QScrollArea) else page
+            host.layout().setContentsMargins(gutter, 0 if modern else 4, 0 if modern else gutter,
+                                            0 if modern else gutter)
+        if hasattr(self, "_stats_summary_grid"):
+            columns = 2 if self.width() < 900 else 4
+            if self._stats_grid_columns != columns:
+                self._stats_grid_columns = columns
+                for card in self._stat_frames:
+                    self._stats_summary_grid.removeWidget(card)
+                for i, card in enumerate(self._stat_frames):
+                    self._stats_summary_grid.addWidget(card, i // columns, i % columns)
+                for i in range(4):
+                    self._stats_summary_grid.setColumnStretch(i, 1 if i < columns else 0)
+        if (getattr(self, "_chart_view", None) is not None and hasattr(self, "_chart_days")
+                and getattr(self, "_chart_wide", None) != (self.width() >= 1200)):
+            self._update_stats_chart(self._chart_days)
 
     def _reflow_controls(self):
         if not hasattr(self, "_control_boxes"):
@@ -2127,9 +2164,9 @@ class MainWindow(QMainWindow):
         self._calendar_season_label = QLabel("")
         self._calendar_season_label.setObjectName("subLabel")
         cal_layout.addWidget(self._calendar_season_label)
-        self._calendar_list = QListWidget()
+        self._calendar_list = AnimeList()
         self._calendar_list.setIconSize(QSize(38, 53))
-        self._calendar_list.itemDoubleClicked.connect(self._open_anilist_entry)
+        self._calendar_list.itemActivated.connect(self._open_anilist_entry)
         self._calendar_list.setContextMenuPolicy(Qt.CustomContextMenu)
         cal_layout.addWidget(self._calendar_list, 1)
         self._library_stack.addWidget(calendar_page)
@@ -2140,9 +2177,9 @@ class MainWindow(QMainWindow):
             sl = QVBoxLayout(section_page)
             sl.setContentsMargins(0, 8, 0, 0)
             sl.setSpacing(8)
-            listw = QListWidget()
+            listw = AnimeList()
             listw.setIconSize(QSize(38, 53))
-            listw.itemDoubleClicked.connect(self._open_anilist_entry)
+            listw.itemActivated.connect(self._open_anilist_entry)
             listw.setContextMenuPolicy(Qt.CustomContextMenu)
             self._library_section_lists[key] = listw
             sl.addWidget(listw, 1)
@@ -2166,7 +2203,9 @@ class MainWindow(QMainWindow):
         self._stats_page = page
 
         # Summary cards (total time, streak, most-watched, titles watched).
-        cards = QHBoxLayout()
+        cards = QGridLayout()
+        self._stats_summary_grid = cards
+        self._stat_frames = []
         cards.setSpacing(self._gap)
         self._stat_cards = {}
         for key, caption in (
@@ -2177,24 +2216,25 @@ class MainWindow(QMainWindow):
         ):
             card = QFrame()
             card.setObjectName("card")
+            card.setMinimumHeight(78 if compact else 88)
+            self._stat_frames.append(card)
             c = QVBoxLayout(card)
             c.setContentsMargins(self._pad, self._pad, self._pad, self._pad)
             c.setSpacing(4)
             value = QLabel("—")
             value.setObjectName("statValue")
             value.setWordWrap(True)
+            value.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
             cap = QLabel(caption)
             cap.setObjectName("sectionLabel")
+            cap.setWordWrap(True)
             c.addWidget(value)
             c.addWidget(cap)
-            cards.addWidget(card, 1)
+            cards.addWidget(card, 0, len(self._stat_frames) - 1)
             self._stat_cards[key] = value
         layout.addLayout(cards)
 
         # AniList backfill: seed the per-title totals from a public list.
-        import_row = QHBoxLayout()
-        import_row.setSpacing(8)
-        import_row.addStretch(1)
         self.import_btn = QPushButton("Import from AniList")
         self.import_btn.setObjectName("ghost")
         self.import_btn.setToolTip(
@@ -2202,8 +2242,6 @@ class MainWindow(QMainWindow):
             "(username in Controls). Does not affect the daily chart."
         )
         self.import_btn.clicked.connect(self._on_import_anilist)
-        import_row.addWidget(self.import_btn)
-        layout.addLayout(import_row)
 
         # Daily hours chart (QtCharts) — degrades to a hint label if missing.
         chart_card = QFrame()
@@ -2211,15 +2249,20 @@ class MainWindow(QMainWindow):
         cc = QVBoxLayout(chart_card)
         cc.setContentsMargins(self._pad, self._pad, self._pad, self._pad)
         cc.setSpacing(4)
-        cc.addWidget(self._field_label("Last 14 days"))
+        chart_header = QHBoxLayout()
+        self._chart_caption = self._field_label("WATCH ACTIVITY · LAST 14 DAYS")
+        chart_header.addWidget(self._chart_caption)
+        chart_header.addStretch(1)
+        chart_header.addWidget(self.import_btn)
+        cc.addLayout(chart_header)
         self._chart_view = None
         self._chart_hint = None
         if QTCHARTS_OK:
             view = QChartView()
             view.setRenderHint(QPainter.Antialiasing)
             # Compact chart so the per-title list below gets the room.
-            view.setMinimumHeight(120)
-            view.setMaximumHeight(160)
+            view.setMinimumHeight(150)
+            view.setMaximumHeight(190)
             self._chart_view = view
             cc.addWidget(view)
         else:
@@ -2240,7 +2283,14 @@ class MainWindow(QMainWindow):
         )
         self._stats_tabs.currentChanged.connect(self._on_stats_section_changed)
         layout.addWidget(self._stats_tabs)
+        self.stats_search = QLineEdit()
+        self.stats_search.setPlaceholderText("Search your watch history and imported lists…")
+        self.stats_search.setClearButtonEnabled(True)
+        self.stats_search.textChanged.connect(self._apply_stats_filter)
+        layout.addWidget(self.stats_search)
         self._stats_stack = QStackedWidget()
+        self._stats_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
+        self._stats_stack.setMinimumHeight(160)
 
         # "Watch time" page: per-title totals with a Resume button.
         watch_page = QWidget()
@@ -2257,9 +2307,9 @@ class MainWindow(QMainWindow):
         clear_btn.clicked.connect(self._on_clear_stats)
         title_row.addWidget(clear_btn)
         watch_layout.addLayout(title_row)
-        self._stats_list = QListWidget()
+        self._stats_list = AnimeList()
         self._stats_list.setIconSize(QSize(38, 53))
-        self._stats_list.itemDoubleClicked.connect(self._resume_stats_item)
+        self._stats_list.itemActivated.connect(self._resume_stats_item)
         self._stats_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self._stats_list.customContextMenuRequested.connect(self._stats_menu)
         watch_layout.addWidget(self._stats_list, 1)
@@ -2278,9 +2328,9 @@ class MainWindow(QMainWindow):
                     "From AniList · double-click to open the show's page"
                 )
             )
-            listw = QListWidget()
+            listw = AnimeList()
             listw.setIconSize(QSize(38, 53))
-            listw.itemDoubleClicked.connect(self._open_anilist_entry)
+            listw.itemActivated.connect(self._open_anilist_entry)
             self._section_lists[key] = listw
             pl.addWidget(listw, 1)
             self._stats_stack.addWidget(page)
@@ -3020,6 +3070,7 @@ class MainWindow(QMainWindow):
         message = payload.get("message") or ""
         username = payload.get("username") or ""
         sections = payload.get("sections") or {}
+        views = {key: listw.view_state() for key, listw in self._library_section_lists.items()}
         if username:
             self.library_account_label.setText(f"{username} · AniList")
         else:
@@ -3054,6 +3105,7 @@ class MainWindow(QMainWindow):
                 if not self.cfg.data.privacy_mode and e.get("url"):
                     item.setToolTip(e["url"])
                 item.setData(Qt.UserRole + 1, e)
+                item.setData(DETAIL_ROLE, f"{prog}{extra}")
                 item.setData(Qt.UserRole + 2, e.get("keywords") or "")
                 cover = e.get("cover") or ""
                 if cover:
@@ -3067,6 +3119,8 @@ class MainWindow(QMainWindow):
                             self._nam.get(QNetworkRequest(QUrl(cover)))
                 listw.addItem(item)
         self._apply_library_filter()
+        for key, listw in self._library_section_lists.items():
+            listw.restore_view(views[key])
         self._maybe_notify_airing(sections)
 
     def _on_library_search(self, _text):
@@ -3079,6 +3133,11 @@ class MainWindow(QMainWindow):
             self._filter_list_items(listw, query)
         self._filter_calendar(query)
 
+    def _apply_stats_filter(self, _text=None):
+        query = self.stats_search.text().strip().casefold()
+        for listw in [self._stats_list, *self._section_lists.values()]:
+            self._filter_list_items(listw, query)
+
     @staticmethod
     def _filter_list_items(listw, query):
         if not query:
@@ -3087,17 +3146,11 @@ class MainWindow(QMainWindow):
             return
         for i in range(listw.count()):
             item = listw.item(i)
-            item.setHidden(query not in (item.data(Qt.UserRole + 2) or ""))
+            searchable = f"{item.text()} {item.data(Qt.UserRole + 2) or ''}".casefold()
+            item.setHidden(query.casefold() not in searchable)
 
     def _filter_calendar(self, query):
-        listw = self._calendar_list
-        if not query:
-            for i in range(listw.count()):
-                listw.item(i).setHidden(False)
-            return
-        for i in range(listw.count()):
-            item = listw.item(i)
-            item.setHidden(query not in (item.data(Qt.UserRole + 2) or ""))
+        self._filter_list_items(self._calendar_list, query)
 
     def _maybe_notify_airing(self, sections):
         """Tray-notify once per episode when a followed show airs within 24h."""
@@ -3126,6 +3179,7 @@ class MainWindow(QMainWindow):
         import datetime
 
         listw = self._calendar_list
+        view = listw.view_state()
         listw.clear()
         self._calendar_season_label.setText(payload.get("season") or "")
         entries = payload.get("entries") or []
@@ -3173,6 +3227,7 @@ class MainWindow(QMainWindow):
                 if not self.cfg.data.privacy_mode and e.get("url"):
                     item.setToolTip(e["url"])
                 item.setData(Qt.UserRole + 1, e)
+                item.setData(DETAIL_ROLE, f"{prog}{badge}")
                 item.setData(Qt.UserRole + 2, e.get("keywords") or "")
                 cover = e.get("cover") or ""
                 if cover:
@@ -3186,10 +3241,13 @@ class MainWindow(QMainWindow):
                             self._nam.get(QNetworkRequest(QUrl(cover)))
                 listw.addItem(item)
         self._apply_library_filter()
+        listw.restore_view(view)
 
     def _refresh_sections(self):
         """Fill the Watching/Planning/Completed lists from the imported lists."""
         sections = self.controller.watchlog.anilist_sections()
+        self._section_icon_pending.clear()
+        views = {key: listw.view_state() for key, listw in self._section_lists.items()}
         for key, listw in self._section_lists.items():
             listw.clear()
             entries = sections.get(key) or []
@@ -3215,6 +3273,7 @@ class MainWindow(QMainWindow):
                 if not self.cfg.data.privacy_mode and e.get("url"):
                     item.setToolTip(e["url"])
                 item.setData(Qt.UserRole + 1, e)
+                item.setData(DETAIL_ROLE, f"{prog} · {format_hours(secs)} watched")
                 cover = e.get("cover") or ""
                 if cover:
                     cached = self._cover_cache_path(cover)
@@ -3227,6 +3286,9 @@ class MainWindow(QMainWindow):
                             self._nam.get(QNetworkRequest(QUrl(cover)))
                 listw.addItem(item)
 
+        for key, listw in self._section_lists.items():
+            listw.restore_view(views[key])
+
     def _refresh_stats(self):
         """Re-read the controller's WatchLog and repaint the Stats tab."""
         watchlog = self.controller.watchlog
@@ -3234,6 +3296,7 @@ class MainWindow(QMainWindow):
         self._stat_cards["streak"].setText(f"{watchlog.current_streak()}d")
         top = watchlog.top_titles(1)
         self._stat_cards["most"].setText(top[0]["title"] if top else "—")
+        self._stat_cards["most"].setToolTip(top[0]["title"] if top else "No watch time recorded yet")
         self._stat_cards["titles"].setText(str(len(watchlog.titles())))
 
         if self._chart_view is not None:
@@ -3241,13 +3304,15 @@ class MainWindow(QMainWindow):
 
         self._refresh_sections()
 
+        view = self._stats_list.view_state()
         self._stats_list.clear()
         self._stats_icon_pending.clear()
-        titles = watchlog.top_titles(12)
+        titles = watchlog.top_titles(None)
         if not titles:
             item = QListWidgetItem("No watch time recorded yet — play an anime and it'll show up here.")
             item.setFlags(Qt.NoItemFlags)
             self._stats_list.addItem(item)
+            self._apply_stats_filter()
             return
         for title in titles:
             ep = title.get("episode")
@@ -3259,6 +3324,8 @@ class MainWindow(QMainWindow):
             if not self.cfg.data.privacy_mode and title.get("url"):
                 item.setToolTip(title["url"])
             item.setData(Qt.UserRole + 1, title)
+            item.setData(DETAIL_ROLE, " · ".join(filter(None, (
+                format_hours(title.get("seconds", 0)) + " watched", f"Episode {ep}" if ep else "", website))))
             cover = title.get("cover") or ""
             if cover:
                 cached = self._cover_cache_path(cover)
@@ -3270,10 +3337,21 @@ class MainWindow(QMainWindow):
                         self._stats_icon_fetching.add(cover)
                         self._nam.get(QNetworkRequest(QUrl(cover)))
             self._stats_list.addItem(item)
+        self._apply_stats_filter()
+        self._stats_list.restore_view(view)
 
     def _update_stats_chart(self, days):
         """Render *days* ([(date, seconds), ...]) as a per-day bar chart."""
         data = days or []
+        self._chart_days = data
+        self._chart_wide = self.width() >= 1200
+        if data:
+            from datetime import date
+            try:
+                start, end = date.fromisoformat(data[0][0]), date.fromisoformat(data[-1][0])
+                self._chart_caption.setText(f"WATCH ACTIVITY · {start:%b %d} – {end:%b %d}")
+            except ValueError:
+                self._chart_caption.setText("WATCH ACTIVITY · LAST 14 DAYS")
         series = QBarSeries()
         barset = QBarSet("Hours")
         accent = QColor(self.cfg.data.accent)
@@ -3290,23 +3368,33 @@ class MainWindow(QMainWindow):
         chart.legend().setVisible(False)
         chart.setBackgroundVisible(False)
         chart.setPlotAreaBackgroundVisible(False)
+        chart.setMargins(QMargins(0, 0, 0, 0))
+        chart.layout().setContentsMargins(0, 0, 0, 0)
+        chart.setBackgroundRoundness(0)
 
         axis_x = QBarCategoryAxis()
-        axis_x.append([d[4:] if len(d) > 5 else d for d, _ in data])
-        axis_x.setLabelsColor(QColor("#8a91a8"))
+        axis_x.append([d[5:] if self.width() >= 1200 else d[-2:] for d, _ in data])
+        axis_color = QColor("#657086" if self._applied_theme == "light" else "#a4aec3")
+        axis_x.setLabelsColor(axis_color)
+        axis_x.setLabelsAngle(0)
         axis_x.setGridLineVisible(False)
         chart.addAxis(axis_x, Qt.AlignBottom)
         series.attachAxis(axis_x)
 
         axis_y = QValueAxis()
-        axis_y.setLabelFormat("%.0f h")
-        axis_y.setLabelsColor(QColor("#8a91a8"))
-        axis_y.setGridLineColor(QColor("#2a2d3a"))
+        axis_y.setLabelFormat("%g h")
+        axis_y.setRange(0, max(1, max((s / 3600.0 for _, s in data), default=0) * 1.15))
+        axis_y.setTickCount(4)
+        axis_y.applyNiceNumbers()
+        axis_y.setLabelsColor(axis_color)
+        axis_y.setGridLineColor(QColor("#d6dce9" if self._applied_theme == "light" else "#30364b"))
         chart.addAxis(axis_y, Qt.AlignLeft)
         series.attachAxis(axis_y)
 
         chart.setAnimationOptions(QChart.NoAnimation)
+        previous_chart = self._chart_view.chart()
         self._chart_view.setChart(chart)
+        previous_chart.deleteLater()
 
     def _on_tab_changed(self, index):
         self._tab_anim_stop()
@@ -3411,7 +3499,7 @@ class MainWindow(QMainWindow):
         self.watch_any_btn.clicked.connect(self._on_watch_any)
         self.clear_manual_btn.clicked.connect(self._on_clear_manual)
         self.stats_btn.clicked.connect(self._on_stats)
-        self.recent_list.itemDoubleClicked.connect(self._open_recent_item)
+        self.recent_list.itemActivated.connect(self._open_recent_item)
         self.recent_list.customContextMenuRequested.connect(self._recent_menu)
 
         self.match_spin.valueChanged.connect(self._on_match_changed)
@@ -3502,6 +3590,8 @@ class MainWindow(QMainWindow):
             + (glass_qss(self._applied_theme, self.cfg.data.accent) if self.cfg.data.glass_effects else "")
         )
         self._sync_navigation(self.tabbar.currentIndex())
+        if getattr(self, "_chart_view", None) is not None and hasattr(self, "_chart_days"):
+            self._update_stats_chart(self._chart_days)
         if self._cover_spinner is not None:
             self._cover_spinner.set_color(self.cfg.data.accent)
         self._apply_backdrop()
@@ -3638,7 +3728,7 @@ class MainWindow(QMainWindow):
         login_status = self.anilist_login_status.text()
         draft_fields = {name: getattr(self, name).text() for name in (
             "anilist_secret_edit", "anilist_client_edit", "anilist_token_edit",
-            "pwa_url_edit", "update_feed_edit", "app_id_edit")}
+            "pwa_url_edit", "update_feed_edit", "app_id_edit", "stats_search", "library_search")}
         chips = [(chip.text(), chip.objectName()) for chip in (self.chrome_chip, self.discord_chip)]
         self._tab_anim_stop()
         for sig in (self.bridge.chrome_status, self.bridge.discord_status,
@@ -4268,6 +4358,7 @@ class MainWindow(QMainWindow):
 
     def _on_recent(self, entries):
         self._last_recent = entries
+        view = self.recent_list.view_state()
         self._recent_icon_pending.clear()
         self.recent_list.clear()
         if not entries:
@@ -4282,6 +4373,8 @@ class MainWindow(QMainWindow):
             label = f"{title} · Ep {ep} · {site}" if ep else f"{title} · {site}"
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, entry)
+            item.setData(Qt.UserRole + 1, entry)
+            item.setData(DETAIL_ROLE, " · ".join(filter(None, (f"Episode {ep}" if ep else "", site))))
             if not self.cfg.data.privacy_mode:
                 item.setToolTip(entry.get("url") or "")
             cover = entry.get("cover") or ""
@@ -4295,6 +4388,8 @@ class MainWindow(QMainWindow):
                         self._recent_icon_fetching.add(cover)
                         self._nam.get(QNetworkRequest(QUrl(cover)))
             self.recent_list.addItem(item)
+
+        self.recent_list.restore_view(view)
 
     def _open_recent_item(self, item):
         entry = item.data(Qt.UserRole) or {}

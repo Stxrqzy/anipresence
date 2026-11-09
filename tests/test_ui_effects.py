@@ -139,3 +139,67 @@ def test_glass_applies_on_first_open_and_persists_across_layouts(make_window):
     assert "border-top-color" in app.styleSheet()
     saved = ConfigManager(window.cfg.path).data
     assert saved.glass_effects and saved.ui_layout == "classic"
+
+
+def test_anime_selection_has_no_focus_box_and_keeps_keyboard_activation(make_window, monkeypatch):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
+    app, window = make_window(smooth_animations=False)
+    window._on_recent([{"title": "First", "url": "https://example.com/1"},
+                       {"title": "Second", "url": "https://example.com/2"}])
+    window.show()
+    window.tabbar.setCurrentIndex(1)
+    app.processEvents()
+    view = window.recent_list
+    view.setCurrentRow(0)
+    view.setFocus()
+    option = QStyleOptionViewItem()
+    option.state |= QStyle.State_HasFocus | QStyle.State_Selected
+    view.itemDelegate().initStyleOption(option, view.model().index(0, 0))
+    assert not option.state & QStyle.State_HasFocus
+    assert option.state & QStyle.State_Selected
+    opened = []
+    monkeypatch.setattr("src.ui.app.webbrowser.open", opened.append)
+    QTest.keyClick(view, Qt.Key_Down)
+    QTest.keyClick(view, Qt.Key_Return)
+    assert opened == ["https://example.com/2"]
+    assert not view.grab().isNull()  # Exercise the custom delegate's paint path.
+
+
+def test_stats_search_covers_all_titles_and_refresh_keeps_selection(make_window, monkeypatch):
+    app, window = make_window()
+    entries = [{"title": f"Anime {i:02}", "seconds": i * 3600,
+                "url": f"https://example.com/{i}"} for i in range(25)]
+    log = window.controller.watchlog
+    monkeypatch.setattr(log, "top_titles", lambda limit=10: entries[:limit])
+    monkeypatch.setattr(log, "anilist_sections", lambda: {"Completed": entries})
+    window._refresh_stats()
+    assert window._stats_list.count() == 25
+    window._stats_list.setCurrentRow(20)
+    window.stats_search.setText("anime 20")
+    assert sum(not window._stats_list.item(i).isHidden() for i in range(25)) == 1
+    assert sum(not window._section_lists["Completed"].item(i).isHidden() for i in range(25)) == 1
+    window._refresh_stats()
+    assert window._stats_list.currentRow() == 20
+    assert not window._stats_list.item(20).isHidden()
+    assert window._stats_list.item(0).isHidden()
+
+
+def test_stats_responsive_margins_and_readable_chart(make_window):
+    app, window = make_window(smooth_animations=False)
+    window.show()
+    window.tabbar.setCurrentIndex(window._stats_tab_index)
+    window.resize(600, 700)
+    app.processEvents()
+    assert window._sidebar.x() > 0
+    assert window._stats_grid_columns == 2
+    assert window._stats_summary_grid.getItemPosition(2)[:2] == (1, 0)
+    assert window._stats_page.widget().width() <= window._stats_page.viewport().width()
+    if window._chart_view is not None:
+        from PySide6.QtCore import Qt
+        window._update_stats_chart([("2026-11-09", 1800), ("2026-11-10", 0)])
+        chart = window._chart_view.chart()
+        assert chart.axes(Qt.Horizontal)[0].categories() == ["09", "10"]
+        assert chart.axes(Qt.Vertical)[0].max() >= 1
+        assert "Nov 09" in window._chart_caption.text()

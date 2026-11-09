@@ -58,6 +58,13 @@ from the page title.
   highlights in both layouts. Navigation uses a short snapshot transition, and
   playback progress eases between updates. Both effects can be disabled in
   **Settings → Appearance**.
+- **Refined lists & statistics** — consistent page margins, responsive summary
+  cards, a readable activity chart, and two-line anime rows. Selection uses a
+  single background highlight; arrow keys and Enter still work. Statistics can
+  search all recorded titles and imported lists, and list refreshes preserve the
+  selected title and scroll position.
+- **New app identity** — a cyan/violet A-and-play symbol with a presence dot,
+  shared by the app, tray, splash screen and Windows installer.
 - **Watch anything** — force a presence for anything AniPresence can't detect
   (non-anime sites, movies, games) with a title/episode/website dialog.
 - **Continue watching** — a *Next episode* button opens the next episode of the

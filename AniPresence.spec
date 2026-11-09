@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('browser-extension', 'extension')],
+    datas=[('browser-extension', 'extension'), ('assets/logo_256.png', 'assets')],
     hiddenimports=['PySide6.QtCharts'],
     hookspath=[],
     hooksconfig={},
