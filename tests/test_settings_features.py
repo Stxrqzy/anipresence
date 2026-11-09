@@ -28,6 +28,21 @@ def test_settings_controls_and_rebuild(tmp_path, monkeypatch):
         assert not cfg.data.presence_cover_art
         window._on_anilist_login()  # setup guidance rather than opening an unregistered client
         assert 'client ID' in window.anilist_login_status.text()
+        from types import SimpleNamespace
+        seen = {}
+        def fake_login(client_id, complete, **kwargs):
+            seen.update(client_id=client_id, **kwargs)
+            return SimpleNamespace(start=lambda: None, cancel=lambda: None,
+                                   launch_url='http://127.0.0.1:8794/start/test')
+        monkeypatch.setattr('src.anime.oauth.OAuthLogin', fake_login)
+        monkeypatch.setattr('src.ui.app.webbrowser.open', lambda url: True)
+        window.anilist_client_edit.setText('123')
+        window.anilist_secret_edit.setText('user-owned-client-secret')
+        window._on_anilist_login()
+        assert seen == {'client_id': '123', 'client_secret': 'user-owned-client-secret'}
+        assert window.anilist_secret_edit.text() == ''
+        assert 'user-owned-client-secret' not in cfg.path.read_text()
+        window._on_anilist_login()  # cancel the mocked in-flight login
         window._on_update_status({'stage': 'available', 'release': {'version': '9.0.0', 'url': 'https://example.com/setup.exe'},
                                   'message': 'New release'})
         assert window.update_download_btn.isEnabled()

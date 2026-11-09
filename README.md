@@ -432,8 +432,13 @@ do not share it.
 
 Create an application at <https://anilist.co/settings/developer> named AniPresence.
 Set its redirect URL to **`http://127.0.0.1:8794/callback`** and paste its public
-client ID into the Settings field. No client secret is used or bundled. Then
-**Connect AniList** opens your default browser, and the returned token is saved
+client ID into the Settings field. If AniList returns **unsupported_grant_type**,
+also enter that application's **Client Secret** in the password field. This
+selects AniList's authorization-code grant, which exchanges the returned code
+for an access token. The secret is used only for that login attempt, cleared from
+the field when login starts, and never saved in config or bundled in releases.
+Without a secret, the implicit grant remains available for clients that support it.
+Then **Connect AniList** opens your default browser, and the returned token is saved
 automatically. Login expires after three minutes and can be cancelled. The
 loopback listener only runs during login. The app opens a local launch URL which
 redirects to AniList with the complete authorization parameters. Disconnect clears the local token;

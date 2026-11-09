@@ -2347,10 +2347,19 @@ class MainWindow(QMainWindow):
         self.anilist_client_edit.editingFinished.connect(
             lambda: self.cfg.set(anilist_client_id=self.anilist_client_edit.text().strip()))
         mm.addWidget(self.anilist_client_edit)
+        self.anilist_secret_edit = QLineEdit()
+        self.anilist_secret_edit.setEchoMode(QLineEdit.Password)
+        self.anilist_secret_edit.setPlaceholderText("AniList Client Secret (authorization-code login)")
+        self.anilist_secret_edit.setToolTip(
+            "Enter your own application's secret when AniList rejects implicit login. "
+            "Used only for this login attempt; it is not saved in config or included in the installer.")
+        mm.addWidget(self.anilist_secret_edit)
         oauth_hint = QLabel(
             'Register AniPresence at <a href="https://anilist.co/settings/developer">AniList developer settings</a> '
             'with redirect URL <b>http://127.0.0.1:8794/callback</b>, then enter its client ID above. '
-            'Connect opens your browser and saves the token automatically; no client secret is needed.')
+            'If AniList shows unsupported_grant_type, enter that application’s Client Secret above. '
+            'This enables authorization-code login. The secret is used only for this attempt; '
+            'Connect saves the resulting access token automatically.')
         oauth_hint.setOpenExternalLinks(True)
         oauth_hint.setWordWrap(True)
         oauth_hint.setObjectName("subLabel")
@@ -2532,11 +2541,13 @@ class MainWindow(QMainWindow):
         generation = self._login_generation
         try:
             flow = OAuthLogin(self.cfg.data.anilist_client_id,
-                lambda result: self.bridge.anilist_login.emit(dict(result, generation=generation)))
+                lambda result: self.bridge.anilist_login.emit(dict(result, generation=generation)),
+                client_secret=self.anilist_secret_edit.text())
         except (ValueError, OSError) as exc:
             self.anilist_login_status.setText(str(exc))
             return
         self._login_flow = flow
+        self.anilist_secret_edit.clear()
         self.anilist_login_btn.setText("Cancel login")
         self.anilist_login_status.setText("Approve access in your browser. Waiting up to 3 minutes…")
         flow.start()
@@ -2565,6 +2576,7 @@ class MainWindow(QMainWindow):
         self.controller.sync_anilist()
 
     def _on_anilist_disconnect(self):
+        self.anilist_secret_edit.clear()
         if self._login_flow:
             self._login_flow.cancel()
             self._login_flow = None
