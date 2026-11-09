@@ -15,6 +15,11 @@ from the page title.
 
 ### Version 3.0 interface
 
+Version 3.0.1 aligns the sidebar with the page banners, uses consistent page
+gutters, and keeps the Overview preview compact. The Orbit wordmark appears in
+the sidebar and opening screens; the transparent purple A-and-swoosh brands the
+Windows app, taskbar, tray, and installer.
+
 The Modern interface follows the six page references: violet glass surfaces,
 an illustrated header (using the playing anime's AniList banner when available),
 a branded sidebar and account shortcut, animated switches, richer library rows

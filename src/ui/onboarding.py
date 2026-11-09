@@ -7,13 +7,12 @@ through :class:`ConfigManager` / :class:`Controller`, so the wizard is purely a
 UI front-end and can be closed or skipped at any point.
 """
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QStackedWidget, QVBoxLayout, QWidget,
 )
 
-from ..logo import logo_pixmap
+from ..logo import OrbitWordmark
 
 BROWSER_INDEX = {"chrome": 0, "brave": 1, "edge": 2, "opera": 3}
 BROWSER_VALUE = {v: k for k, v in BROWSER_INDEX.items()}
@@ -82,13 +81,8 @@ class OnboardingWizard(QDialog):
         page = QWidget()
         v = QVBoxLayout(page)
         v.setSpacing(12)
-        icon = QIcon()
-        pm = logo_pixmap(96)
-        if pm is not None:
-            icon = QIcon(pm)
-        icon_label = QLabel()
-        icon_label.setPixmap(icon.pixmap(96, 96))
-        icon_label.setAlignment(Qt.AlignCenter)
+        icon_label = OrbitWordmark()
+        icon_label.setFixedHeight(100)
         v.addWidget(icon_label)
         v.addWidget(_title("Welcome to AniPresence"))
         v.addWidget(_body(

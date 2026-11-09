@@ -21,27 +21,17 @@ class SplashWindow(QWidget):
         if not self._accent.isValid():
             self._accent = QColor("#7c5cff")
         self._bg_color = QColor(20, 22, 32) if dark else QColor(250, 250, 252)
-        self._title_color = "#ffffff" if dark else "#111318"
         self._sub_color = "#9aa3bd" if dark else "#6b7280"
         self._bar_bg = "rgba(255, 255, 255, 0.14)" if dark else "rgba(0, 0, 0, 0.10)"
 
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setFixedSize(360, 300)
+        self.setFixedSize(480, 260)
 
-        from ..logo import logo_pixmap
+        from ..logo import OrbitWordmark
 
-        logo_pix = logo_pixmap(128)
-        logo_label = QLabel()
-        logo_label.setAlignment(Qt.AlignCenter)
-        if logo_pix is not None:
-            logo_label.setPixmap(logo_pix)
-        else:
-            logo_label.setText("AP")
-
-        title = QLabel("AniPresence")
-        title.setObjectName("splashTitle")
-        title.setAlignment(Qt.AlignCenter)
+        logo_label = OrbitWordmark()
+        logo_label.setFixedHeight(112)
         subtitle = QLabel("Chrome \u2192 AniList \u2192 Discord Rich Presence")
         subtitle.setObjectName("splashSub")
         subtitle.setAlignment(Qt.AlignCenter)
@@ -59,7 +49,6 @@ class SplashWindow(QWidget):
         layout.addStretch(1)
         layout.addWidget(logo_label)
         layout.addSpacing(10)
-        layout.addWidget(title)
         layout.addWidget(subtitle)
         layout.addSpacing(14)
         layout.addWidget(self._bar)
@@ -68,9 +57,6 @@ class SplashWindow(QWidget):
         self.setStyleSheet(
             f"""
             QLabel {{ color: {self._sub_color}; font-size: 12px; }}
-            QLabel#splashTitle {{ color: {self._title_color}; font-size: 28px;
-                font-weight: 650; font-family: Figtree, "Segoe UI Variable",
-                "Segoe UI", sans-serif; }}
             QLabel#splashSub {{ color: {self._sub_color}; font-size: 12px; }}
             QProgressBar#splashBar {{ background-color: {self._bar_bg};
                 border: none; border-radius: 4px; }}
@@ -78,7 +64,6 @@ class SplashWindow(QWidget):
                 border-radius: 4px; }}
             """
         )
-        title.setObjectName("splashTitle")
         subtitle.setObjectName("splashSub")
         self._bar.setObjectName("splashBar")
 

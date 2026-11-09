@@ -9,7 +9,7 @@ def paint_landscape(painter, rect, accent, light=False, variant=0):
     """Resolution-independent moonlit landscape, with space left for headings."""
     painter.save()
     opacity = painter.opacity()
-    painter.setClipRect(rect)
+    painter.setClipRect(rect, Qt.IntersectClip)
     painter.translate(rect.topLeft())
     w, h = rect.width(), rect.height()
     tint = QColor(accent)
@@ -77,6 +77,9 @@ class IllustratedHeader(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
+        clip = QPainterPath()
+        clip.addRoundedRect(QRectF(self.rect()), 14, 14)
+        painter.setClipPath(clip)
         paint_landscape(painter, QRectF(self.rect()), self.accent, self.light, self.variant)
         if not self.art.isNull():
             pixmap=self.art.scaled(self.size(),Qt.KeepAspectRatioByExpanding,Qt.SmoothTransformation)

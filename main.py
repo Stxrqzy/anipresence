@@ -55,6 +55,8 @@ def main():
     )
     app = QApplication(sys.argv)
     app.setApplicationName("AniPresence")
+    from src.logo import logo_icon
+    app.setWindowIcon(logo_icon())
     from src.fonts import register_fonts
     register_fonts()  # load the embedded Figtree UI font
     app.setStyleSheet(

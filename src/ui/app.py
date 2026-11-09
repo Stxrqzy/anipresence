@@ -1120,20 +1120,7 @@ class MainWindow(QMainWindow):
             self.chrome_chip.show()
             self.discord_chip.show()
             self._header_hid_chips = False
-        if w < 700 and not self._header_hid_sub:
-            self._subtitle_label.hide()
-            self._version_label.hide()
-            self._header_hid_sub = True
-        elif w >= 700 and self._header_hid_sub:
-            self._subtitle_label.show()
-            self._version_label.show()
-            self._header_hid_sub = False
-        if hasattr(self,"_brand_title"):
-            modern = self.cfg.data.ui_layout == "modern"
-            self._brand_title.setVisible(not modern or w>=900)
-            self._subtitle_label.setVisible(w >= (900 if modern else 700))
-            self._version_label.setVisible(w >= (900 if modern else 700))
-            self._sidebar_account.setVisible(modern and w>=900)
+        self._sidebar_account.setVisible(self.cfg.data.ui_layout == "modern" and w>=900)
 
     def _install_resize_filter(self):
         """Enable native edge-resize for the borderless window (Windows only)."""
@@ -1315,49 +1302,11 @@ class MainWindow(QMainWindow):
         for btn in (self.win_min_btn, self.win_max_btn, self.win_close_btn):
             header.addWidget(btn)
 
-        logo_label = QLabel()
-        logo_label.setObjectName("appLogo")
-        logo_label.setFixedSize(38, 38)
-        logo_label.setAlignment(Qt.AlignCenter)
-        logo_label.setAttribute(Qt.WA_TransparentForMouseEvents)
-        try:
-            from ..logo import logo_pixmap
-            pm = logo_pixmap(38)
-            if pm is not None:
-                logo_label.setPixmap(pm)
-            else:
-                logo_label.setText("AP")
-        except Exception:  # noqa: BLE001
-            logo_label.setText("AP")
-        self._brand = QWidget()
-        self._brand.setObjectName("surfaceContent")
-        brand_layout = QHBoxLayout(self._brand)
-        brand_layout.setContentsMargins(0,0,0,0)
-        brand_layout.setSpacing(10)
-        brand_layout.addWidget(logo_label)
-
-        title_col = QVBoxLayout()
-        title_col.setSpacing(0)
-        title = QLabel("AniPresence")
-        self._brand_title = title
-        title.setObjectName("appTitle")
-        title.setAttribute(Qt.WA_TransparentForMouseEvents)
-        title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        subtitle = QLabel("Chrome → AniList → Discord Rich Presence")
-        subtitle.setObjectName("subLabel")
-        subtitle.setAttribute(Qt.WA_TransparentForMouseEvents)
-        subtitle.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        self._subtitle_label = subtitle
-        self._version_label = QLabel(f"Version {__version__} · click for info")
-        self._version_label.setObjectName("versionLabel")
-        self._version_label.setCursor(Qt.PointingHandCursor)
-        self._version_label.setToolTip("About AniPresence")
-        self._version_label.mousePressEvent = lambda _event: self._on_about()
-        self._version_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        title_col.addWidget(title)
-        title_col.addWidget(subtitle)
-        title_col.addWidget(self._version_label)
-        brand_layout.addLayout(title_col, 1)
+        from ..logo import OrbitWordmark
+        self._brand = OrbitWordmark(compact_icon=True)
+        self._brand.setToolTip(f"AniPresence {__version__} · About")
+        self._brand.setCursor(Qt.PointingHandCursor)
+        self._brand.mousePressEvent = lambda _event: self._on_about()
         header.addWidget(self._brand, 1)
         header.addStretch(1)
 
@@ -1525,6 +1474,7 @@ class MainWindow(QMainWindow):
         left.setContentsMargins(0, 0, 0, 0)
         left.setSpacing(self._gap)
         dash_root = QVBoxLayout(dashboard)
+        self._dashboard_layout = dash_root
         dash_root.setContentsMargins(0, 0, 0, 0)
         dash_root.setSpacing(self._gap)
         dash_root.addLayout(left, 1)
@@ -1912,8 +1862,8 @@ class MainWindow(QMainWindow):
         self._sidebar.setObjectName("sidebar")
         nav = QVBoxLayout(self._sidebar)
         self._sidebar_layout = nav
-        nav.setContentsMargins(10, 18, 10, 16)
-        nav.setSpacing(6)
+        nav.setContentsMargins(10, 14, 10, 14)
+        nav.setSpacing(12)
         self._nav_buttons = []
         self._page_names = ["Overview", "History", "Library", "Statistics", "Settings", "Activity log"]
         self._page_descriptions = [
@@ -2004,13 +1954,15 @@ class MainWindow(QMainWindow):
             btn.setProperty("modern",modern)
             btn.setFixedSize(30,26) if modern else btn.setFixedSize(14,14)
             btn.setText(btn._current_glyph() if modern else "")
-        self._subtitle_label.setText("Your anime. Your presence." if modern else
-                                     "Chrome → AniList → Discord Rich Presence")
         self._now_card_layout.removeWidget(self._now_info)
         self._now_top_row.removeWidget(self._now_info)
         if modern:
             self._sidebar_layout.insertWidget(0,self._brand)
-            self._content_layout.insertWidget(0,self.title_bar)
+            self._outer_layout.insertWidget(0,self.title_bar)
+            self._brand.setMaximumWidth(16777215)
+            self._dashboard_layout.setAlignment(Qt.AlignTop)
+            self._dashboard_layout.setStretch(1, 0)
+            self._preview_frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
             self._now_info.layout().addWidget(self._modern_actions)
             self.open_site_btn.setObjectName("primaryAction")
             self._now_column.setAlignment(Qt.AlignTop)
@@ -2030,6 +1982,11 @@ class MainWindow(QMainWindow):
         else:
             self._header_layout.insertWidget(0,self._brand,1)
             self._outer_layout.insertWidget(0,self.title_bar)
+            self._brand.setMaximumWidth(180)
+            self._brand.setFixedHeight(44)
+            self._dashboard_layout.setAlignment(Qt.AlignmentFlag(0))
+            self._dashboard_layout.setStretch(1, 1)
+            self._preview_frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
             self._now_card_layout.addWidget(self._modern_actions)
             self.open_site_btn.setObjectName("ghost")
             self._now_column.setAlignment(Qt.AlignmentFlag(0))
@@ -2053,7 +2010,6 @@ class MainWindow(QMainWindow):
                        self.theme_combo, self.accent_combo):
             widget.show()
         self._brand.show()
-        self._brand.setMinimumHeight(72 if modern else 0)
         self.title_bar.show()
         for card in (self._account_card,self._pwa_card,self._actions_card):card.show()
         for sep in self._controls_card.findChildren(QFrame):
@@ -2079,9 +2035,15 @@ class MainWindow(QMainWindow):
         modern = self.cfg.data.ui_layout == "modern"
         compact = self.cfg.data.compact
         inset = (8 if self.width() < 760 else 12 if compact else 16) if modern else 0
-        self._body_layout.setContentsMargins(inset, 6 if modern else 0, inset, inset)
+        self._body_layout.setContentsMargins(inset, inset if modern else 0, inset, inset)
         gutter = (12 if self.width() < 760 or compact else 20) if modern else (14 if compact else 16)
-        self._page_heading.layout().setContentsMargins(gutter, 12, 0, 18)
+        self._body_layout.setSpacing(gutter if modern else 0)
+        self._content_layout.setContentsMargins(0, 0, 0, 0)
+        self._page_heading.layout().setContentsMargins(gutter, 16, gutter, 16)
+        self._header_layout.setContentsMargins(inset if modern else 16, 8, inset if modern else 16, 0 if modern else 2)
+        if modern:
+            self._page_heading.setFixedHeight(112)
+            self._brand.setFixedHeight(112 - self._sidebar_layout.contentsMargins().top())
         if modern and hasattr(self,"_modern_actions"):
             target = self._now_card_layout if self.width()<1000 else self._now_info_layout
             if self._modern_actions.parentWidget() != target.parentWidget():
@@ -2090,8 +2052,8 @@ class MainWindow(QMainWindow):
         for i in range(self.stack.count()):
             page = self.stack.widget(i)
             host = page.widget() if isinstance(page, QScrollArea) else page
-            host.layout().setContentsMargins(gutter, 0 if modern else 4, 0 if modern else gutter,
-                                            0 if modern else gutter)
+            host.layout().setContentsMargins(0 if modern else gutter, gutter if modern else 4,
+                                            0 if modern else gutter, 0 if modern else gutter)
         for host in (self._history_classic,self._stats_classic,self._log_classic):
             host.layout().setContentsMargins(0,0,0,0)
         if hasattr(self, "_stats_summary_grid"):
