@@ -13,6 +13,23 @@ from the page title.
 
 ## Features
 
+### Version 3.0 interface
+
+The Modern interface follows the six page references: violet glass surfaces,
+an illustrated header (using the playing anime's AniList banner when available),
+a branded sidebar and account shortcut, animated switches, richer library rows
+with episode progress and scores, and reorganized Settings cards.
+
+- **History:** search and filter by anime, status and date; group entries by day.
+  Up to 1,000 recent episodes are retained. Timing is recorded for new playback;
+  older entries without timing are not marked completed or given invented progress.
+- **Statistics:** weekly and monthly local-playback charts, genre share, top anime,
+  and date-range summaries. Imported totals count in All time; recorded episode
+  counts come from retained local history. **View all titles** opens detailed lists.
+- **Activity log:** persistent local events, text/type/date filters, event details,
+  pagination and CSV export. Clear removes the saved activity journal too.
+- **Classic** remains available through Settings → Appearance.
+
 - **Real player-state detection** — reads the live `<video>` element with CDP.
   Works even for cross-origin iframe players (GoGoAnime, AnimePahe, AniWave…)
   by attaching to each iframe's own DevTools target.

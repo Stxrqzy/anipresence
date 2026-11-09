@@ -55,3 +55,49 @@ def modern_qss(theme, accent):
     QWidget#modernRoot QProgressBar::chunk {{ background: {accent}; border-radius: 3px; }}
     QWidget#modernRoot QLineEdit, QWidget#modernRoot QComboBox, QWidget#modernRoot QSpinBox {{ border: 1px solid {border}; border-radius: 8px; padding: 8px; }}
     """
+
+
+def revamp_qss(theme, accent, glass=True):
+    """The v3 reference palette: violet glass, restrained glow, crisp hierarchy."""
+    light = theme == "light"
+    ink = "#282137" if light else "#f5f1ff"
+    muted = "#776a90" if light else "#b5aacd"
+    edge = "rgba(107,79,160,55)" if light else "rgba(171,135,232,65)"
+    panel = ("rgba(255,255,255,205)" if light else "rgba(26,24,45,210)") if glass else ("#ffffff" if light else "#191728")
+    from PySide6.QtGui import QColor
+    color = QColor(accent)
+    brighter = color.lighter(140).name()
+    darker = color.darker(150).name()
+    top_edge = f"border-top-color: {'#ffffff' if light else '#61517e'};" if glass else ""
+    return f"""
+    QWidget#modernRoot {{ color: {ink}; }}
+    QWidget#modernRoot QFrame#sidebar {{ background: {'rgba(246,241,255,225)' if light else 'rgba(18,15,33,230)'}; border: 1px solid {edge}; border-radius: 16px; }}
+    QWidget#modernRoot QFrame#card, QWidget#modernRoot QFrame#controls,
+    QWidget#modernRoot QFrame#preview, QWidget#modernRoot QFrame#continueStrip {{ background: {panel}; border: 1px solid {edge}; {top_edge} border-radius: 14px; }}
+    QWidget#modernRoot QLabel#pageTitle {{ color: {ink}; font-size: 34px; font-weight: 750; }}
+    QWidget#modernRoot QLabel#pageDescription {{ color: {muted}; font-size: 14px; }}
+    QWidget#modernRoot QLabel#cardHeading {{ color: {ink}; font-size: 17px; font-weight: 700; }}
+    QWidget#modernRoot QLabel#metricValue {{ color: {ink}; font-size: 29px; font-weight: 750; }}
+    QWidget#modernRoot QLabel#sectionLabel {{ color: {muted}; font-size: 12px; letter-spacing: 0.4px; }}
+    QWidget#modernRoot QLabel#titleLabel {{ font-size: 30px; }}
+    QWidget#modernRoot QLabel#captionLabel {{ color: {brighter}; font-size: 14px; }}
+    QWidget#modernRoot QPushButton#navButton {{ padding: 14px 12px; font-size: 14px; border: 1px solid transparent; border-radius: 11px; }}
+    QWidget#modernRoot QPushButton#navButton:checked {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 {darker},stop:1 {accent}); border: 1px solid {brighter}; color: white; }}
+    QWidget#modernRoot QPushButton#profileButton {{ background: {panel}; border: 1px solid {edge}; border-radius: 12px; padding: 14px 10px; text-align: left; color: {ink}; }}
+    QWidget#modernRoot QPushButton#primaryAction {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 {brighter},stop:1 {accent}); border: 1px solid {brighter}; padding: 10px 18px; border-radius: 10px; color: white; }}
+    QWidget#modernRoot QPushButton#ghost {{ border: 1px solid {edge}; padding: 9px 13px; border-radius: 9px; }}
+    QWidget#modernRoot QLabel#chipOk {{ border: 1px solid rgba(55,210,125,110); color: {'#167c42' if light else '#67ef94'}; padding: 6px 12px; }}
+    QWidget#modernRoot QLabel#chipBad {{ border: 1px solid rgba(245,92,120,100); color: {'#ad304d' if light else '#ff8599'}; padding: 6px 12px; }}
+    QWidget#modernRoot QPushButton#winMin, QWidget#modernRoot QPushButton#winMax, QWidget#modernRoot QPushButton#winClose {{ background: transparent; border: none; border-radius: 5px; color: {muted}; font-size: 16px; padding: 0; }}
+    QWidget#modernRoot QPushButton#winClose:hover {{ background: #bb3255; color: white; }}
+    QWidget#modernRoot QPushButton#winMin:hover, QWidget#modernRoot QPushButton#winMax:hover {{ background: {panel}; color: {ink}; }}
+    QWidget#modernRoot QTabBar::tab {{ background: {panel}; border: 1px solid {edge}; border-radius: 10px; padding: 9px 16px; color: {muted}; }}
+    QWidget#modernRoot QTabBar::tab:selected {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 {accent},stop:1 {darker}); border-color: {brighter}; color: white; }}
+    QWidget#modernRoot QLineEdit, QWidget#modernRoot QComboBox {{ background: {'rgba(255,255,255,185)' if light else 'rgba(13,12,25,170)'}; border: 1px solid {edge}; padding: 9px 12px; border-radius: 9px; color: {ink}; }}
+    QWidget#modernRoot QListWidget#animeList {{ background: {'rgba(255,255,255,130)' if light else 'rgba(13,12,25,110)'}; border: 1px solid {edge}; padding: 6px; }}
+    QWidget#modernRoot QListWidget#animeList::item:selected {{ background: {'#e1d4fa' if light else '#34264f'}; border: none; }}
+    QWidget#modernRoot QTableWidget {{ background: {panel}; alternate-background-color: {'#f0eafa' if light else '#201b32'}; color: {ink}; border: none; outline: none; selection-background-color: {darker}; selection-color: white; }}
+    QWidget#modernRoot QTableWidget::item {{ padding: 8px; border: none; }}
+    QWidget#modernRoot QHeaderView::section {{ background: {'#ece5f7' if light else '#252039'}; color: {muted}; border: none; padding: 12px 8px; font-weight: 600; }}
+    QWidget#modernRoot QProgressBar::chunk {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 {accent},stop:1 {brighter}); }}
+    """

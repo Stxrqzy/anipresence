@@ -203,3 +203,54 @@ def test_stats_responsive_margins_and_readable_chart(make_window):
         assert chart.axes(Qt.Horizontal)[0].categories() == ["09", "10"]
         assert chart.axes(Qt.Vertical)[0].max() >= 1
         assert "Nov 09" in window._chart_caption.text()
+
+
+def test_v3_history_filters_and_completion_use_recorded_timing(make_window):
+    import time
+    from PySide6.QtCore import Qt
+    _,window=make_window()
+    panel=window._history_modern
+    panel.set_entries([
+        {"title":"Finished", "episode":1, "duration":100, "current_time":95, "last_watched":time.time()},
+        {"title":"Legacy", "episode":2, "last_watched":time.time()},
+        {"title":"Old", "episode":3, "last_watched":time.time()-86400*100},
+    ])
+    panel.status.setCurrentText("Completed")
+    entries=[panel.list.item(i).data(Qt.UserRole+1) for i in range(panel.list.count())]
+    assert [e["title"] for e in entries if e]==["Finished"]
+    panel.status.setCurrentIndex(0); panel.period.setCurrentText("Last 7 days")
+    panel.search.setText("Legacy")
+    assert panel.count.text()=="1 entries"
+
+
+def test_v3_activity_persists_filters_exports_and_clears(make_window,tmp_path):
+    from src.core.activity import ActivityJournal
+    _,window=make_window()
+    window._on_log("Connected to Discord")
+    window._on_detection({"title":"Example", "episode":4, "paused":True, "url":"https://example.com"})
+    panel=window._activity_panel
+    panel.kind.setCurrentText("Playback")
+    assert len(panel.filtered)==1
+    assert panel.filtered[0]["message"]=="Paused"
+    path=tmp_path/"activity.csv"
+    panel.export_to(path)
+    assert "Example" in path.read_text(encoding="utf-8-sig")
+    reloaded=ActivityJournal(window._activity.path)
+    assert len(reloaded.entries)==2
+    window._on_clear_log()
+    assert not ActivityJournal(window._activity.path).entries
+    assert not panel.filtered
+
+
+def test_v3_analytics_range_does_not_distribute_imports_into_local_days(make_window,monkeypatch):
+    from datetime import date
+    _,window=make_window()
+    log=window.controller.watchlog
+    monkeypatch.setattr(log,"top_titles",lambda limit=None:[{"title":"Example", "seconds":360000,
+                       "days":{date.today().isoformat():3600}}])
+    panel=window._analytics
+    panel.refresh()
+    assert panel.metrics["time"].text()=="100h"
+    panel.period.setCurrentText("Last 7 days")
+    assert panel.metrics["time"].text()=="1h"
+    assert not any(value for _,value in panel.line.values)

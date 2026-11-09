@@ -23,6 +23,8 @@ from PySide6.QtGui import (
 )
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from .anime_list import AnimeList, DETAIL_ROLE
+from .v3_widgets import IllustratedHeader, IllustratedSidebar, Toggle
+from .v3_pages import HistoryPanel, ActivityPanel, AnalyticsPanel
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QColorDialog, QComboBox, QDialog, QDialogButtonBox,
     QFormLayout, QFrame, QGraphicsOpacityEffect, QGridLayout, QHBoxLayout,
@@ -584,6 +586,8 @@ class _TrafficButton(QPushButton):
 
     def _current_glyph(self):
         window = self.window()
+        if self.property("modern"):
+            return ""
         if self._alt_glyph and window is not self and window.isMaximized():
             return self._alt_glyph
         return self._glyph
@@ -592,8 +596,28 @@ class _TrafficButton(QPushButton):
         self.setText(self._current_glyph())
         super().enterEvent(event)
 
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if not self.property("modern"):
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(QPen(self.palette().buttonText().color(), 1.3))
+        x, y = self.width() // 2, self.height() // 2
+        if self.objectName() == "winClose":
+            painter.drawLine(x-4, y-4, x+4, y+4)
+            painter.drawLine(x-4, y+4, x+4, y-4)
+        elif self.objectName() == "winMin":
+            painter.drawLine(x-5, y, x+5, y)
+        elif self.window().isMaximized():
+            painter.drawRect(x-2, y-5, 7, 7)
+            painter.fillRect(QRect(x-5, y-2, 7, 7), self.palette().window())
+            painter.drawRect(x-5, y-2, 7, 7)
+        else:
+            painter.drawRect(x-4, y-4, 8, 8)
+
     def leaveEvent(self, event):  # noqa: N802 (Qt naming)
-        self.setText("")
+        self.setText(self._current_glyph() if self.property("modern") else "")
         super().leaveEvent(event)
 
 
@@ -854,6 +878,11 @@ class MainWindow(QMainWindow):
         self.cfg = cfg
         self.bridge = bridge
         self.controller = controller
+        from ..core.activity import ActivityJournal
+        self._activity = ActivityJournal(APP_DIR / "activity.json")
+        self._activity_playback_key = None
+        self._banner_url = ""
+        self._banner_requests = set()
         self._login_flow = None
         self._login_generation = 0
         self._update_busy = False
@@ -913,7 +942,7 @@ class MainWindow(QMainWindow):
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowMinimizeButtonHint)
 
         self.setWindowTitle(f"AniPresence {__version__}")
-        self.resize(960, 780)
+        self.resize(1280, 860)
         self.setMinimumSize(600, 430)
         self.setWindowIcon(app_icon(64, cfg.data.accent))
         self._applied_theme = resolve_theme(cfg.data.theme)
@@ -1078,7 +1107,7 @@ class MainWindow(QMainWindow):
         w = self.width()
         if hasattr(self, "_sidebar"):
             narrow = w < 900
-            self._sidebar.setFixedWidth(68 if narrow else 170)
+            self._sidebar.setFixedWidth(68 if narrow else 220)
             for button, name in zip(self._nav_buttons, self._page_names):
                 button.setText("" if narrow else name)
             self._reflow_controls()
@@ -1099,6 +1128,12 @@ class MainWindow(QMainWindow):
             self._subtitle_label.show()
             self._version_label.show()
             self._header_hid_sub = False
+        if hasattr(self,"_brand_title"):
+            modern = self.cfg.data.ui_layout == "modern"
+            self._brand_title.setVisible(not modern or w>=900)
+            self._subtitle_label.setVisible(w >= (900 if modern else 700))
+            self._version_label.setVisible(w >= (900 if modern else 700))
+            self._sidebar_account.setVisible(modern and w>=900)
 
     def _install_resize_filter(self):
         """Enable native edge-resize for the borderless window (Windows only)."""
@@ -1241,6 +1276,7 @@ class MainWindow(QMainWindow):
         self._control_grid_mode = None
         self._stats_grid_columns = None
         outer = QVBoxLayout(central)
+        self._outer_layout = outer
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
         self.setCentralWidget(central)
@@ -1293,11 +1329,17 @@ class MainWindow(QMainWindow):
                 logo_label.setText("AP")
         except Exception:  # noqa: BLE001
             logo_label.setText("AP")
-        header.addWidget(logo_label)
+        self._brand = QWidget()
+        self._brand.setObjectName("surfaceContent")
+        brand_layout = QHBoxLayout(self._brand)
+        brand_layout.setContentsMargins(0,0,0,0)
+        brand_layout.setSpacing(10)
+        brand_layout.addWidget(logo_label)
 
         title_col = QVBoxLayout()
         title_col.setSpacing(0)
         title = QLabel("AniPresence")
+        self._brand_title = title
         title.setObjectName("appTitle")
         title.setAttribute(Qt.WA_TransparentForMouseEvents)
         title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
@@ -1315,7 +1357,8 @@ class MainWindow(QMainWindow):
         title_col.addWidget(title)
         title_col.addWidget(subtitle)
         title_col.addWidget(self._version_label)
-        header.addLayout(title_col, 1)
+        brand_layout.addLayout(title_col, 1)
+        header.addWidget(self._brand, 1)
         header.addStretch(1)
 
         self.chrome_chip = QLabel(
@@ -1396,7 +1439,14 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(main_scroll)
 
         recent_page = QWidget()
-        recent_layout = QVBoxLayout(recent_page)
+        recent_wrapper = QVBoxLayout(recent_page)
+        self._history_classic = QWidget()
+        recent_layout = QVBoxLayout(self._history_classic)
+        recent_wrapper.addWidget(self._history_classic)
+        self._history_modern = HistoryPanel(self._cover_cache_path)
+        self._history_modern.activated.connect(lambda entry: webbrowser.open(entry["url"]) if entry and entry.get("url") else None)
+        self._history_modern.clear_requested.connect(self._on_clear_history)
+        recent_wrapper.addWidget(self._history_modern,1)
         recent_layout.setContentsMargins(m, (6 if not compact else 4), m, m)
         recent_layout.setSpacing(self._gap)
         recent_header = QHBoxLayout()
@@ -1419,13 +1469,27 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self._library_page)
 
         self._build_stats_page(m, compact)
+        self._stats_classic = self._stats_page.takeWidget()
+        stats_wrapper = QWidget()
+        stats_layout = QVBoxLayout(stats_wrapper)
+        self._analytics = AnalyticsPanel(self.controller, self._cover_cache_path)
+        self._analytics.view_all.connect(self._show_all_stats)
+        stats_layout.addWidget(self._analytics)
+        stats_layout.addWidget(self._stats_classic)
+        self._stats_page.setWidget(stats_wrapper)
         self.stack.addWidget(self._stats_page)
 
         self._build_settings_page(m, compact)
         self.stack.addWidget(self._settings_page)
 
         log_page = QWidget()
-        log_layout = QVBoxLayout(log_page)
+        log_wrapper = QVBoxLayout(log_page)
+        self._log_classic = QWidget()
+        log_layout = QVBoxLayout(self._log_classic)
+        log_wrapper.addWidget(self._log_classic)
+        self._activity_panel = ActivityPanel(self._activity)
+        self._activity_panel.clear_requested.connect(self._on_clear_log)
+        log_wrapper.addWidget(self._activity_panel,1)
         log_layout.setContentsMargins(m, (6 if not compact else 4), m, m)
         log_layout.setSpacing(self._gap)
         log_header = QHBoxLayout()
@@ -1639,32 +1703,33 @@ class MainWindow(QMainWindow):
         self._controls_card = controls
         controls.setObjectName("controls")
         c_layout = QVBoxLayout(controls)
+        self._classic_controls_layout = c_layout
         c_layout.setContentsMargins(self._pad, (12 if not self.cfg.data.compact else 8), self._pad, self._pad)
         c_layout.setSpacing(10)
         c_layout.addWidget(self._field_label("CONTROLS"))
 
-        self.rpc_check = QCheckBox("Enable Discord RPC")
-        self.detection_check = QCheckBox("Enable auto detection")
-        self.auto_chrome_check = QCheckBox("Auto-launch browser")
-        self.tray_check = QCheckBox("Minimize to tray on close")
-        self.startup_check = QCheckBox("Start with Windows")
-        self.privacy_check = QCheckBox("Privacy mode (hide URLs in log)")
-        self.compact_check = QCheckBox("Compact layout")
-        self.idle_check = QCheckBox("Idle presence when nothing playing")
+        self.rpc_check = Toggle("Enable Discord RPC")
+        self.detection_check = Toggle("Enable auto detection")
+        self.auto_chrome_check = Toggle("Auto-launch browser")
+        self.tray_check = Toggle("Minimize to tray on close")
+        self.startup_check = Toggle("Start with Windows")
+        self.privacy_check = Toggle("Privacy mode (hide URLs in log)")
+        self.compact_check = Toggle("Compact layout")
+        self.idle_check = Toggle("Idle presence when nothing playing")
         self.idle_check.setToolTip("Show a 'Browsing anime' presence instead of clearing it when no video is detected.")
-        self.mica_check = QCheckBox("Mica backdrop (Windows 11)")
+        self.mica_check = Toggle("Mica backdrop (Windows 11)")
         self.mica_check.setToolTip("Draw the Mica material behind the window (applies on next start; falls back to acrylic).")
-        self.cinematic_check = QCheckBox("Cinematic backdrop")
+        self.cinematic_check = Toggle("Cinematic backdrop")
         self.cinematic_check.setToolTip(
             "Dim the current cover art behind the whole window for a cinematic look. "
             "The base window fills become translucent so the backdrop shows through."
         )
-        self.auto_accent_check = QCheckBox("Auto accent from cover art")
+        self.auto_accent_check = Toggle("Auto accent from cover art")
         self.auto_accent_check.setToolTip(
             "Sample a vibrant accent color from the current cover art and tint the "
             "buttons, spinner and tray icon per show. Pick a manual accent to override."
         )
-        self.hide_adult_check = QCheckBox("Hide 18+/ecchi from Discord status")
+        self.hide_adult_check = Toggle("Hide 18+/ecchi from Discord status")
         self.hide_adult_check.setToolTip(
             "Don't broadcast animes that are 18+ or ecchi/NSFW-adjacent to Discord. "
             "They still appear in the app's own history and stats."
@@ -1713,7 +1778,12 @@ class MainWindow(QMainWindow):
 
         c_layout.addWidget(self._sep())
 
-        c_layout.addWidget(self._field_label("ANILIST ACCOUNT"))
+        self._account_card = QFrame()
+        self._account_card.setObjectName("card")
+        account_layout = QVBoxLayout(self._account_card)
+        account_layout.setContentsMargins(self._pad,self._pad,self._pad,self._pad)
+        account_layout.addWidget(self._field_label("ANILIST ACCOUNT"))
+        c_layout.addWidget(self._account_card)
         account_row = QHBoxLayout()
         account_row.setSpacing(8)
         self.account_avatar = QLabel()
@@ -1741,18 +1811,23 @@ class MainWindow(QMainWindow):
         remove_acct_btn.setToolTip("Remove the selected account (its save file is kept)")
         remove_acct_btn.clicked.connect(self._on_remove_anilist_account)
         account_row.addWidget(remove_acct_btn)
-        c_layout.addLayout(account_row)
+        account_layout.addLayout(account_row)
         account_hint = QLabel(
             "Each account's watch history loads from its own save file on switch."
         )
         account_hint.setObjectName("subLabel")
         account_hint.setWordWrap(True)
-        c_layout.addWidget(account_hint)
+        account_layout.addWidget(account_hint)
         self._populate_anilist_accounts()
 
         c_layout.addWidget(self._sep())
 
-        c_layout.addWidget(self._field_label("OPEN A SITE AS PWA"))
+        self._pwa_card = QFrame()
+        self._pwa_card.setObjectName("card")
+        pwa_layout = QVBoxLayout(self._pwa_card)
+        pwa_layout.setContentsMargins(self._pad,self._pad,self._pad,self._pad)
+        pwa_layout.addWidget(self._field_label("OPEN A SITE AS PWA"))
+        c_layout.addWidget(self._pwa_card)
         pwa_row = QHBoxLayout()
         pwa_row.setSpacing(8)
         self.pwa_url_edit = QLineEdit()
@@ -1766,16 +1841,21 @@ class MainWindow(QMainWindow):
         )
         self.launch_pwa_btn.clicked.connect(self._launch_pwa_url)
         pwa_row.addWidget(self.launch_pwa_btn)
-        c_layout.addLayout(pwa_row)
+        pwa_layout.addLayout(pwa_row)
 
         c_layout.addWidget(self._sep())
 
+        self._actions_card = QFrame()
+        self._actions_card.setObjectName("card")
+        actions_layout = QVBoxLayout(self._actions_card)
+        actions_layout.setContentsMargins(self._pad,self._pad,self._pad,self._pad)
+        c_layout.addWidget(self._actions_card)
         self.watch_any_btn = QPushButton("Watch anything…")
         self.watch_any_btn.setToolTip(
             "Force a presence for something AniPresence can't detect — an anime "
             "you're watching on a non-anime site, a movie, a game, anything."
         )
-        c_layout.addWidget(self.watch_any_btn)
+        actions_layout.addWidget(self.watch_any_btn)
         manual_row = QHBoxLayout()
         manual_row.setSpacing(8)
         self.clear_manual_btn = QPushButton("Clear manual")
@@ -1786,7 +1866,7 @@ class MainWindow(QMainWindow):
         self.stats_btn.setToolTip("Show how long you've watched each show (from your history).")
         manual_row.addWidget(self.clear_manual_btn)
         manual_row.addWidget(self.stats_btn)
-        c_layout.addLayout(manual_row)
+        actions_layout.addLayout(manual_row)
 
         c_layout.addWidget(self._sep())
 
@@ -1798,13 +1878,13 @@ class MainWindow(QMainWindow):
         self.backup_btn.setToolTip("Copy config.json to the Desktop")
         self.clear_rpc_btn.setObjectName("ghost")
         self.reconnect_btn.setObjectName("ghost")
-        c_layout.addWidget(self.launch_chrome_btn)
+        actions_layout.addWidget(self.launch_chrome_btn)
         action_row = QHBoxLayout()
         action_row.setSpacing(8)
         action_row.addWidget(self.reconnect_btn)
         action_row.addWidget(self.clear_rpc_btn)
-        c_layout.addLayout(action_row)
-        c_layout.addWidget(self.backup_btn)
+        actions_layout.addLayout(action_row)
+        actions_layout.addWidget(self.backup_btn)
 
         c_layout.addStretch(1)
         left.addWidget(controls, 4)
@@ -1828,9 +1908,10 @@ class MainWindow(QMainWindow):
         self._body_layout = body
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
-        self._sidebar = QFrame()
+        self._sidebar = IllustratedSidebar()
         self._sidebar.setObjectName("sidebar")
         nav = QVBoxLayout(self._sidebar)
+        self._sidebar_layout = nav
         nav.setContentsMargins(10, 18, 10, 16)
         nav.setSpacing(6)
         self._nav_buttons = []
@@ -1852,10 +1933,16 @@ class MainWindow(QMainWindow):
             button.clicked.connect(lambda checked=False, i=index: self.tabbar.setCurrentIndex(i))
             nav.addWidget(button)
             self._nav_buttons.append(button)
+        self._sidebar_account = QPushButton("Default profile\nAniList · Add an account")
+        self._sidebar_account.setObjectName("profileButton")
+        self._sidebar_account.clicked.connect(self._show_account_settings)
+        nav.addSpacing(14)
+        nav.addWidget(self._sidebar_account)
         body.addWidget(self._sidebar)
         content = QVBoxLayout()
+        self._content_layout = content
         content.setSpacing(0)
-        self._page_heading = QWidget()
+        self._page_heading = IllustratedHeader()
         heading = QVBoxLayout(self._page_heading)
         heading.setContentsMargins(20, 20, 20, 16)
         heading.setSpacing(4)
@@ -1880,6 +1967,8 @@ class MainWindow(QMainWindow):
             button.setIcon(navigation_icon(i, color))
         self._page_title.setText(self._page_names[index])
         self._page_description.setText(self._page_descriptions[index])
+        self._page_heading.variant = index
+        self._page_heading.update()
 
     def _sync_more_actions(self):
         for action, button in self._more_links:
@@ -1905,15 +1994,31 @@ class MainWindow(QMainWindow):
         self._modern_actions.setVisible(modern)
         self._quick_controls.setVisible(modern)
         self._appearance_colors.setVisible(modern)
+        self._history_modern.setVisible(modern)
+        self._history_classic.setVisible(not modern)
+        self._activity_panel.setVisible(modern)
+        self._log_classic.setVisible(not modern)
+        self._analytics.setVisible(modern)
+        self._stats_classic.setVisible(not modern)
+        for btn in (self.win_min_btn,self.win_max_btn,self.win_close_btn):
+            btn.setProperty("modern",modern)
+            btn.setFixedSize(30,26) if modern else btn.setFixedSize(14,14)
+            btn.setText(btn._current_glyph() if modern else "")
         self._subtitle_label.setText("Your anime. Your presence." if modern else
                                      "Chrome → AniList → Discord Rich Presence")
         self._now_card_layout.removeWidget(self._now_info)
         self._now_top_row.removeWidget(self._now_info)
         if modern:
+            self._sidebar_layout.insertWidget(0,self._brand)
+            self._content_layout.insertWidget(0,self.title_bar)
+            self._now_info.layout().addWidget(self._modern_actions)
+            self.open_site_btn.setObjectName("primaryAction")
             self._now_column.setAlignment(Qt.AlignTop)
             self._left_pane.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
             self._now_info_layout.setAlignment(Qt.AlignVCenter)
             self._settings_page.widget().layout().insertWidget(1, self._controls_card)
+            for index,card in enumerate((self._account_card,self._pwa_card,self._actions_card),2):
+                self._settings_page.widget().layout().insertWidget(index,card)
             self._now_top_row.addWidget(self._now_info, 1)
             self._modern_action_row.insertWidget(0, self.open_site_btn)
             self._modern_action_row.insertWidget(1, self.next_ep_btn)
@@ -1923,10 +2028,16 @@ class MainWindow(QMainWindow):
             self._appearance_colors.layout().addWidget(self.accent_combo)
             self._left_pane.setMinimumWidth(0)
         else:
+            self._header_layout.insertWidget(0,self._brand,1)
+            self._outer_layout.insertWidget(0,self.title_bar)
+            self._now_card_layout.addWidget(self._modern_actions)
+            self.open_site_btn.setObjectName("ghost")
             self._now_column.setAlignment(Qt.AlignmentFlag(0))
             self._left_pane.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
             self._now_info_layout.setAlignment(Qt.AlignmentFlag(0))
             self._dashboard_row.addWidget(self._controls_card, 4)
+            for index,card in zip((4,6,8),(self._account_card,self._pwa_card,self._actions_card)):
+                self._classic_controls_layout.insertWidget(index,card)
             self._now_card_layout.insertWidget(1, self._now_info)
             self._classic_action_layout.insertWidget(0, self.open_site_btn)
             self._classic_action_layout.insertWidget(4, self.next_ep_btn)
@@ -1941,10 +2052,26 @@ class MainWindow(QMainWindow):
                        self.next_ep_btn, self.rpc_check, self.detection_check,
                        self.theme_combo, self.accent_combo):
             widget.show()
+        self._brand.show()
+        self._brand.setMinimumHeight(72 if modern else 0)
+        self.title_bar.show()
+        for card in (self._account_card,self._pwa_card,self._actions_card):card.show()
+        for sep in self._controls_card.findChildren(QFrame):
+            if sep.objectName()=="sep":sep.setVisible(not modern)
         self.progress.setTextVisible(not modern)
         self._update_header_for_width()
         self._update_cover_size()
         QTimer.singleShot(0, self._update_cover_size)
+
+    def _show_all_stats(self):
+        self._stats_classic.setVisible(not self._stats_classic.isVisible())
+        if self._stats_classic.isVisible():
+            self._refresh_stats()
+            self._stats_page.ensureWidgetVisible(self.stats_search)
+
+    def _show_account_settings(self):
+        self.tabbar.setCurrentIndex(self._settings_tab_index)
+        self._settings_page.ensureWidgetVisible(self.anilist_combo)
 
     def _update_layout_spacing(self):
         if not hasattr(self, "_body_layout"):
@@ -1955,11 +2082,18 @@ class MainWindow(QMainWindow):
         self._body_layout.setContentsMargins(inset, 6 if modern else 0, inset, inset)
         gutter = (12 if self.width() < 760 or compact else 20) if modern else (14 if compact else 16)
         self._page_heading.layout().setContentsMargins(gutter, 12, 0, 18)
+        if modern and hasattr(self,"_modern_actions"):
+            target = self._now_card_layout if self.width()<1000 else self._now_info_layout
+            if self._modern_actions.parentWidget() != target.parentWidget():
+                target.addWidget(self._modern_actions)
+                self._modern_actions.show()
         for i in range(self.stack.count()):
             page = self.stack.widget(i)
             host = page.widget() if isinstance(page, QScrollArea) else page
             host.layout().setContentsMargins(gutter, 0 if modern else 4, 0 if modern else gutter,
                                             0 if modern else gutter)
+        for host in (self._history_classic,self._stats_classic,self._log_classic):
+            host.layout().setContentsMargins(0,0,0,0)
         if hasattr(self, "_stats_summary_grid"):
             columns = 2 if self.width() < 900 else 4
             if self._stats_grid_columns != columns:
@@ -3291,6 +3425,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_stats(self):
         """Re-read the controller's WatchLog and repaint the Stats tab."""
+        self._analytics.refresh()
         watchlog = self.controller.watchlog
         self._stat_cards["total"].setText(format_hours(watchlog.total_seconds()))
         self._stat_cards["streak"].setText(f"{watchlog.current_streak()}d")
@@ -3406,6 +3541,8 @@ class MainWindow(QMainWindow):
             self._refresh_stats()
         if index == self._library_tab_index:
             self._on_refresh_library()
+        if index == 5:
+            self._activity_panel.refresh()
         self._animate_tab_in(self.stack.currentWidget(), snapshot)
 
     def _animate_tab_in(self, widget, snapshot=None):
@@ -3576,7 +3713,7 @@ class MainWindow(QMainWindow):
     def _apply_stylesheet(self):
         self._tab_anim_stop()
         self._applied_theme = resolve_theme(self.cfg.data.theme)
-        from .modern import modern_qss
+        from .modern import modern_qss, revamp_qss
         from .effects import glass_qss
         self.centralWidget().configure(self.cfg.data.glass_effects, self._applied_theme, self.cfg.data.accent)
         QApplication.instance().setStyleSheet(
@@ -3588,7 +3725,12 @@ class MainWindow(QMainWindow):
             ) + (modern_qss(self._applied_theme, self.cfg.data.accent)
                  if self.cfg.data.ui_layout == "modern" else "")
             + (glass_qss(self._applied_theme, self.cfg.data.accent) if self.cfg.data.glass_effects else "")
+            + (revamp_qss(self._applied_theme,self.cfg.data.accent,self.cfg.data.glass_effects)
+               if self.cfg.data.ui_layout == "modern" else "")
         )
+        self._page_heading.accent = self.cfg.data.accent
+        self._page_heading.light = self._applied_theme == "light"
+        self._page_heading.update()
         self._sync_navigation(self.tabbar.currentIndex())
         if getattr(self, "_chart_view", None) is not None and hasattr(self, "_chart_days"):
             self._update_stats_chart(self._chart_days)
@@ -3803,6 +3945,9 @@ class MainWindow(QMainWindow):
             idx = self.anilist_combo.findData(active)
             self.anilist_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self._load_account_avatar()
+        if hasattr(self,"_sidebar_account"):
+            connected=bool(self.cfg.data.anilist_access_token and self.cfg.data.anilist_sync_account==active)
+            self._sidebar_account.setText(f"{active or 'Default profile'}\nAniList · {'Connected' if connected else 'Public profile' if active else 'Add an account'}")
 
     def _load_account_avatar(self):
         """Request the avatar for the currently active account (monogram while
@@ -3947,6 +4092,12 @@ class MainWindow(QMainWindow):
             return
         previous = self._current_payload or {}
         self._current_payload = payload
+        self._load_banner(payload.get("banner_url") or "")
+        key = (payload.get("url"),payload.get("title"),payload.get("episode"),bool(payload.get("paused")))
+        if key != self._activity_playback_key:
+            self._activity_playback_key = key
+            self._record_activity("Playback", "Paused" if payload.get("paused") else "Started watching",
+                                  title=payload.get("title"),episode=payload.get("episode"))
         if self._match_panel_url and self._match_panel_url != payload.get("url"):
             self._hide_match_chooser()
         title = payload.get("title") or "Unknown title"
@@ -4358,6 +4509,7 @@ class MainWindow(QMainWindow):
 
     def _on_recent(self, entries):
         self._last_recent = entries
+        self._history_modern.set_entries(entries)
         view = self.recent_list.view_state()
         self._recent_icon_pending.clear()
         self.recent_list.clear()
@@ -4424,6 +4576,8 @@ class MainWindow(QMainWindow):
 
     def _on_clear_log(self):
         self.log_view.clear()
+        self._activity.clear()
+        self._activity_panel.refresh()
 
     # ----------------------------------------------------------------- about
     def _on_about(self):
@@ -4569,14 +4723,32 @@ class MainWindow(QMainWindow):
         self._quit_app()
 
     def _on_log(self, line):
-        self.log_view.appendPlainText(
-            redact_urls(line) if self.cfg.data.privacy_mode else line
-        )
+        from ..core.activity import classify_message
+        text = redact_urls(line) if self.cfg.data.privacy_mode else line
+        self.log_view.appendPlainText(text)
+        self._record_activity(classify_message(text), text)
+
+    def _record_activity(self, kind, message, **context):
+        self._activity.add(kind, message, account=self.controller.active_anilist_account, **context)
+        if hasattr(self,"_activity_panel") and self.tabbar.currentIndex() == 5:
+            self._activity_panel.refresh()
 
     def _log_line(self, message):
         self._on_log(message)
 
     # ------------------------------------------------------------ cover art
+    def _load_banner(self, url):
+        if url == self._banner_url and not self._page_heading.art.isNull():return
+        self._banner_url = url
+        if not url:
+            self._page_heading.art = QPixmap(); self._page_heading.update(); return
+        path=self._cover_cache_path(url)
+        if path.exists():
+            self._page_heading.art=QPixmap(str(path));self._page_heading.update()
+        elif url not in self._banner_requests:
+            self._banner_requests.add(url)
+            self._nam.get(QNetworkRequest(QUrl(url)))
+
     def _cover_cache_path(self, url):
         ext = Path(urlsplit(url).path).suffix.lower() or ".jpg"
         name = hashlib.sha1(url.encode("utf-8", "ignore")).hexdigest()[:20] + ext
@@ -4603,6 +4775,19 @@ class MainWindow(QMainWindow):
 
     def _on_cover_reply(self, reply):
         orig = reply.request().url().toString()
+        if orig in self._banner_requests:
+            self._banner_requests.discard(orig)
+            if reply.error() == QNetworkReply.NoError:
+                data=bytes(reply.readAll()); pixmap=QPixmap()
+                if pixmap.loadFromData(data):
+                    try:
+                        self._cover_cache_dir.mkdir(parents=True,exist_ok=True)
+                        self._cover_cache_path(orig).write_bytes(data)
+                    except OSError: pass
+                    if orig == self._banner_url:
+                        self._page_heading.art=pixmap; self._page_heading.update()
+            reply.deleteLater()
+            return
         pending = None
         if orig in self._avatar_pending_reply:
             # Account-avatar image for the account indicator.

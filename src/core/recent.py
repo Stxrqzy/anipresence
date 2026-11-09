@@ -9,7 +9,7 @@ logger = logging.getLogger("anipresence.recent")
 
 
 class RecentHistory:
-    MAX_ITEMS = 20
+    MAX_ITEMS = 1000
 
     def __init__(self, path=None):
         self._path = Path(path) if path else Path.cwd() / "recent.json"
@@ -63,7 +63,7 @@ class RecentHistory:
             del self._items[self.MAX_ITEMS:]
             self._save()
 
-    def add_watch_seconds(self, title, episode, website, seconds):
+    def add_watch_seconds(self, title, episode, website, seconds, playback=None):
         """Accumulate playback seconds onto the matching entry (or create one)."""
         if seconds <= 0:
             return
@@ -73,6 +73,8 @@ class RecentHistory:
                 if self._key_of(i) == key:
                     i["watch_seconds"] = i.get("watch_seconds", 0) + seconds
                     i["last_watched"] = time.time()
+                    if playback:
+                        i.update(playback)
                     self._save()
                     return
             entry = {

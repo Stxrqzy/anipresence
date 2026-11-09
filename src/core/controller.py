@@ -822,7 +822,12 @@ class Controller:
         if not meta:
             return
         title, episode, website, url, cover = meta
-        self.recent.add_watch_seconds(title, episode, website, secs)
+        playback = None
+        if self._current and self._current.key == key:
+            video = self._current.detection.video
+            if video:
+                playback = {"current_time": video.current_time, "duration": video.duration}
+        self.recent.add_watch_seconds(title, episode, website, secs, playback=playback)
         self.watchlog.add(title, episode, website, url, cover, secs)
         # Throttle UI refreshes — the watch total changes every poll, but the
         # recent list only needs to redraw (and re-resolve icons) occasionally.
@@ -975,6 +980,10 @@ class Controller:
             "anilist_id": media.id if media else None,
             "anilist_url": media.site_url if media else "",
             "cover": media.cover_large if media else "",
+            "episodes_total": media.episodes if media else None,
+            "banner_url": getattr(media, "banner_url", "") if media else "",
+            "current_time": detection.video.current_time if detection.video else None,
+            "duration": detection.video.duration if detection.video else None,
         }
         self.recent.add(entry)
         self.bridge.recent.emit(self.recent.items())
@@ -1367,6 +1376,8 @@ class Controller:
             "progress": progress,
             "episodes": media.episodes,
             "seconds": progress * 1440,  # ~24 min per episode
+            "genres": list(media.genres),
+            "mean_score": media.mean_score,
         }
         if status in ("CURRENT", "REPEATING", "WATCHING"):
             sections["Watching"].append(section_entry)
@@ -1395,6 +1406,7 @@ class Controller:
         return {
             "title": title,
             "detected_title": detection.cleaned_title or detection.raw_title,
+            "banner_url": getattr(media, "banner_url", "") if media else "",
             "episode": detection.episode,
             "episodes_total": media.episodes if media else None,
             "season": media.season if media else "",

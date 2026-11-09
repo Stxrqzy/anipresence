@@ -24,6 +24,7 @@ query ($search: String, $perPage: Int) {
       title { romaji english native }
       synonyms
       coverImage { extraLarge large }
+      bannerImage
       description(asHtml: false)
       siteUrl
       episodes
@@ -46,6 +47,7 @@ query ($id: Int) {
     title { romaji english native }
     synonyms
     coverImage { extraLarge large }
+    bannerImage
     description(asHtml: false)
     siteUrl
     episodes
@@ -183,6 +185,7 @@ class Media:
     genres: list = field(default_factory=list)
     is_adult: bool = False
     tags: list = field(default_factory=list)
+    banner_url: str = ""
 
     @classmethod
     def from_dict(cls, d):
@@ -223,6 +226,7 @@ class Media:
             genres=list(d.get("genres") or []),
             is_adult=bool(d.get("isAdult") or d.get("is_adult")),
             tags=list(d.get("tags") or []),
+            banner_url=d.get("bannerImage") or d.get("banner_url") or "",
         )
 
     def display_title(self):
