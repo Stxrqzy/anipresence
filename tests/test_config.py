@@ -30,6 +30,15 @@ def test_defaults_when_key_missing(tmp_path):
     assert cfg.data.mica_backdrop is True
 
 
+def test_release_feed_migration_preserves_custom_feeds(tmp_path):
+    path = tmp_path / 'config.json'
+    old = 'https://api.github.com/repos/Stxrqzy/anipresence/releases/latest'
+    new = 'https://api.github.com/repos/Stxrqzy/anipresence-releases/releases/latest'
+    for source, expected in [(old, new), ('https://example.com/update.json', 'https://example.com/update.json')]:
+        path.write_text(json.dumps({'update_feed_url': source, 'auto_check_updates': True}))
+        assert ConfigManager(path).data.update_feed_url == expected
+
+
 def test_legacy_username_migrates_to_accounts(tmp_path):
     path = tmp_path / "config.json"
     path.write_text(json.dumps({"anilist_username": "NarutoFan"}), encoding="utf-8")

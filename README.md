@@ -385,7 +385,7 @@ defaults). All keys:
 | `presence_cover_art` | `true` | Include anime cover art in Discord |
 | `presence_paused_label` | `true` | Include the Paused text label (timers still stop when disabled) |
 | `auto_check_updates` | `true` | Check at startup and every six hours |
-| `update_feed_url` | GitHub latest-release API for `Stxrqzy/anipresence` | HTTPS GitHub release API or custom JSON feed |
+| `update_feed_url` | GitHub latest-release API for `Stxrqzy/anipresence-releases` | HTTPS GitHub release API or custom JSON feed |
 | `rpc_enabled` | `true` | Master switch for Discord Rich Presence |
 | `rpc_broadcast` | `"discord"` | Where to announce activity: `"discord"` (RPC pipe), `"vencord"` (Vencord plugin bridge), or `"both"` |
 | `detection_enabled` | `true` | Master switch for Chrome detection |
@@ -435,7 +435,8 @@ Set its redirect URL to **`http://127.0.0.1:8794/callback`** and paste its publi
 client ID into the Settings field. No client secret is used or bundled. Then
 **Connect AniList** opens your default browser, and the returned token is saved
 automatically. Login expires after three minutes and can be cancelled. The
-loopback listener only runs during login. Disconnect clears the local token;
+loopback listener only runs during login. The app opens a local launch URL which
+redirects to AniList with the complete authorization parameters. Disconnect clears the local token;
 access may also be revoked from AniList's settings.
 
 The sync panel shows the verified account, last successful sync, pending episode
@@ -465,7 +466,7 @@ with progress followed by **Install update**. Install launches setup and quits t
 running app. Downloads go to `%APPDATA%\AniPresence\updates` and are checked against
 the feed's SHA-256 digest when one is supplied.
 
-The default feed is the GitHub latest-release API for `Stxrqzy/anipresence`.
+The default feed is the GitHub latest-release API for `Stxrqzy/anipresence-releases`.
 **The repository must be public and have a published release with an installer
 asset**; pushing a commit/tag alone does not publish the installer. For private
 development repositories, host a public HTTPS JSON feed instead:

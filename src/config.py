@@ -68,7 +68,7 @@ class Config:
     anilist_last_sync: float = 0.0
     custom_sites: list = field(default_factory=list)   # [{"name": str, "host": str}]
     hide_adult_content: bool = True
-    update_feed_url: str = "https://api.github.com/repos/Stxrqzy/anipresence/releases/latest"
+    update_feed_url: str = "https://api.github.com/repos/Stxrqzy/anipresence-releases/releases/latest"
     auto_check_updates: bool = True
     onboarding_complete: bool = False
     hotkey_toggle: str = "Ctrl+Alt+A"        # show/hide the window
@@ -101,6 +101,8 @@ class ConfigManager:
         if "onboarding_complete" not in raw:
             self.data.onboarding_complete = True
         if "auto_check_updates" not in raw and not self.data.update_feed_url:
+            self.data.update_feed_url = Config().update_feed_url
+        if self.data.update_feed_url == "https://api.github.com/repos/Stxrqzy/anipresence/releases/latest":
             self.data.update_feed_url = Config().update_feed_url
         # Migrate the pre-account single-username config: it becomes one account.
         if not self.data.anilist_accounts and self.data.anilist_username.strip():

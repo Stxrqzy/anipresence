@@ -39,6 +39,18 @@ def test_browser_login_validates_state_and_identifies_account(monkeypatch):
     assert 'client_secret' not in query
     flow.start()
     try:
+        assert '&' not in flow.launch_url and '?' not in flow.launch_url
+        conn = http.client.HTTPConnection('127.0.0.1', flow.server.server_port, timeout=5)
+        try:
+            conn.request('GET', urlsplit(flow.launch_url).path)
+            response = conn.getresponse()
+            assert response.status == 302
+            redirected = urlsplit(response.getheader('Location'))
+            assert redirected.netloc == 'anilist.co'
+            assert parse_qs(redirected.query) == query
+            response.read()
+        finally:
+            conn.close()
         assert post(flow, {'state': 'wrong', 'token': 'secret'}) == 403
         assert post(flow, {'state': flow.state, 'token': 'secret'}, 'https://other.example') == 403
         assert not seen

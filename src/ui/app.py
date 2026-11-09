@@ -2540,7 +2540,7 @@ class MainWindow(QMainWindow):
         self.anilist_login_btn.setText("Cancel login")
         self.anilist_login_status.setText("Approve access in your browser. Waiting up to 3 minutes…")
         flow.start()
-        if not webbrowser.open(flow.url):
+        if not webbrowser.open(flow.launch_url):
             flow.cancel()
             self._login_flow = None
             self.anilist_login_btn.setText("Connect AniList")

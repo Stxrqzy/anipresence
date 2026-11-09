@@ -51,6 +51,16 @@ class OAuthLogin:
                 pass
 
             def do_GET(self):  # noqa: N802
+                if self.path == f'/start/{owner.state}':
+                    # Let the browser handle the OAuth query string, rather than
+                    # passing ampersands through Windows URL-handler commands.
+                    self.send_response(302)
+                    self.send_header('Location', owner.url)
+                    self.send_header('Cache-Control', 'no-store')
+                    self.send_header('Referrer-Policy', 'no-referrer')
+                    self.send_header('Content-Length', '0')
+                    self.end_headers()
+                    return
                 if self.path.split('?')[0] != '/callback':
                     self.send_error(404)
                     return
@@ -99,6 +109,7 @@ class OAuthLogin:
             'redirect_uri': f'http://127.0.0.1:{self.server.server_port}/callback',
             'state': self.state,
         })
+        self.launch_url = f'http://127.0.0.1:{self.server.server_port}/start/{self.state}'
 
     def start(self):
         threading.Thread(target=self._run, daemon=True, name='anilist-login').start()
