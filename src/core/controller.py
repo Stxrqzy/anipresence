@@ -198,6 +198,8 @@ class Controller:
         self._anilist_pull_inflight = False
         self._anilist_pull_token = None
         self._anilist_pull_again = False
+        self._activity_inflight = set()
+        self._activity_attempts = {}
         self._anilist_sync_error = ""
         self._anilist_sync_activity = "Ready"
         self._last_recent_emit = 0.0
@@ -828,7 +830,9 @@ class Controller:
             if video:
                 playback = {"current_time": video.current_time, "duration": video.duration}
         self.recent.add_watch_seconds(title, episode, website, secs, playback=playback)
-        self.watchlog.add(title, episode, website, url, cover, secs)
+        media = self._current.media if self._current and self._current.key == key else None
+        self.watchlog.add(media.display_title() if media else title, episode, website, url, cover, secs,
+                          media_id=media.id if media else None)
         # Throttle UI refreshes — the watch total changes every poll, but the
         # recent list only needs to redraw (and re-resolve icons) occasionally.
         if time.time() - self._last_recent_emit >= 10:
@@ -1207,6 +1211,42 @@ class Controller:
         """Back-compat alias for :meth:`sync_anilist` (stats/Library refresh)."""
         self.sync_anilist(username)
 
+    def refresh_activity_stats(self, force=False):
+        """Read this profile's activity off-thread, at most once per five minutes."""
+        account, log = self._active_account, self.watchlog
+        if not account:
+            return
+        key = account.casefold()
+        with self._anilist_status_lock:
+            if key in self._activity_inflight:
+                return
+            last = max(self._activity_attempts.get(key, 0), log.activity().get("fetched_at", 0))
+            if not force and time.time()-last < 300:
+                return
+            self._activity_inflight.add(key)
+            self._activity_attempts[key] = time.time()
+        token = self.cfg.data.anilist_access_token if self.cfg.data.anilist_sync_account.casefold() == key else ""
+        self.bridge.activity_stats.emit({"account": account, "loading": True})
+
+        def _run():
+            client = AniListClient(access_token=token)
+            message = ""
+            try:
+                snapshot = client.fetch_user_activity(account)
+                if self.stop_event.is_set() or self.watchlog is not log:
+                    return
+                log.set_activity(snapshot)
+            except Exception as exc:
+                message = f"Activity refresh failed; keeping cached data: {exc}"
+                self.bridge.log.emit(message)
+            finally:
+                client._session.close()
+                with self._anilist_status_lock:
+                    self._activity_inflight.discard(key)
+                self.bridge.activity_stats.emit({"account": account, "loading": False, "message": message})
+
+        threading.Thread(target=_run, daemon=True).start()
+
     def refresh_library(self, username=None):
         """Fetch the active account's full AniList list for the Library tab.
 
@@ -1375,7 +1415,8 @@ class Controller:
             "status": status,
             "progress": progress,
             "episodes": media.episodes,
-            "seconds": progress * 1440,  # ~24 min per episode
+            "seconds": progress * (media.duration or 24) * 60,
+            "media_id": media.id,
             "genres": list(media.genres),
             "mean_score": media.mean_score,
         }
@@ -1385,7 +1426,7 @@ class Controller:
             sections["Planning"].append(section_entry)
         elif status == "COMPLETED":
             sections["Completed"].append(section_entry)
-        if status in ("CURRENT", "COMPLETED", "REPEATING") and progress > 0:
+        if status in ("CURRENT", "COMPLETED", "REPEATING", "PAUSED", "DROPPED") and progress > 0:
             records.append(
                 {
                     "title": media.display_title(),
@@ -1393,7 +1434,8 @@ class Controller:
                     "website": "AniList",
                     "url": media.site_url,
                     "cover": media.cover_large,
-                    "seconds": progress * 1440,  # ~24 min per episode
+                    "seconds": progress * (media.duration or 24) * 60,
+                    "media_id": media.id,
                 }
             )
         return records, sections

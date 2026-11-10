@@ -181,6 +181,13 @@ def test_fetch_viewer_list_requires_token():
         client.fetch_viewer_list()
 
 
+def test_custom_lists_do_not_duplicate_imported_progress():
+    entry = {"status": "CURRENT", "progress": 4, "media": {"id": 42, "title": {"romaji": "A"}}}
+    parsed = AniListClient._parse_list_collection({"MediaListCollection": {
+        "lists": [{"entries": [entry]}, {"entries": [entry]}]}})
+    assert len(parsed) == 1
+
+
 def test_fetch_viewer_list_parses_collection(monkeypatch):
     def fake_query(query, variables):
         if "Viewer" in query:

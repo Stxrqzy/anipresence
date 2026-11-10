@@ -36,7 +36,7 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 SetupIconFile=assets\logo.ico
-UninstallDisplayIcon={app}\AniPresence.exe
+UninstallDisplayIcon={app}\anipresence-orbit.ico
 UninstallDisplayName={#MyAppName}
 CloseApplications=yes
 RestartApplications=no
@@ -50,12 +50,47 @@ Name: "runapp"; Description: "&Launch {#MyAppName} after finishing"; GroupDescri
 
 [Files]
 Source: "dist\AniPresence\AniPresence.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "assets\logo.ico"; DestDir: "{app}"; DestName: "anipresence-orbit.ico"; Flags: ignoreversion
 Source: "dist\AniPresence\_internal\*"; DestDir: "{app}\_internal"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "browser-extension\*"; DestDir: "{app}\extension"; Excludes: "settings.json"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\anipresence-orbit.ico"; AppUserModelID: "AniPresence.Desktop.Orbit"
+Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\anipresence-orbit.ico"; AppUserModelID: "AniPresence.Desktop.Orbit"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent; Tasks: runapp
+
+[Code]
+procedure SHChangeNotify(wEventId, uFlags, dwItem1, dwItem2: Integer);
+  external 'SHChangeNotify@shell32.dll stdcall';
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  Folder: String;
+  Entry: TFindRec;
+  Shell, Shortcut: Variant;
+begin
+  if CurStep <> ssPostInstall then Exit;
+  { Refresh only pins pointing to this installation; leave other apps alone. }
+  Folder := ExpandConstant('{userappdata}\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\');
+  if FindFirst(Folder + '*.lnk', Entry) then begin
+    try
+      repeat
+        try
+          Shell := CreateOleObject('WScript.Shell');
+          Shortcut := Shell.CreateShortcut(Folder + Entry.Name);
+          if CompareText(Shortcut.TargetPath, ExpandConstant('{app}\{#MyAppExeName}')) = 0 then begin
+            Shortcut.IconLocation := ExpandConstant('{app}\anipresence-orbit.ico') + ',0';
+            Shortcut.Save;
+          end;
+        except
+          Log('Could not refresh a pinned shortcut: ' + Entry.Name);
+        end;
+      until not FindNext(Entry);
+    finally
+      FindClose(Entry);
+    end;
+  end;
+  SHChangeNotify($08000000, 0, 0, 0);
+end;

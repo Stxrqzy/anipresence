@@ -169,11 +169,11 @@ def test_anime_selection_has_no_focus_box_and_keeps_keyboard_activation(make_win
 
 def test_stats_search_covers_all_titles_and_refresh_keeps_selection(make_window, monkeypatch):
     app, window = make_window()
-    entries = [{"title": f"Anime {i:02}", "seconds": i * 3600,
+    entries = [{"title": f"Anime {i:02}", "seconds": (25-i) * 3600,
                 "url": f"https://example.com/{i}"} for i in range(25)]
     log = window.controller.watchlog
-    monkeypatch.setattr(log, "top_titles", lambda limit=10: entries[:limit])
-    monkeypatch.setattr(log, "anilist_sections", lambda: {"Completed": entries})
+    log.import_titles(entries)
+    log.set_anilist_sections({"Completed": entries})
     window._refresh_stats()
     assert window._stats_list.count() == 25
     window._stats_list.setCurrentRow(20)
@@ -246,11 +246,11 @@ def test_v3_analytics_range_does_not_distribute_imports_into_local_days(make_win
     from datetime import date
     _,window=make_window()
     log=window.controller.watchlog
-    monkeypatch.setattr(log,"top_titles",lambda limit=None:[{"title":"Example", "seconds":360000,
-                       "days":{date.today().isoformat():3600}}])
+    log.add("Example", 1, "site", "", "", 3600)
+    log.import_titles([{"title":"Example", "seconds":360000}])
     panel=window._analytics
     panel.refresh()
     assert panel.metrics["time"].text()=="100h"
     panel.period.setCurrentText("Last 7 days")
     assert panel.metrics["time"].text()=="1h"
-    assert not any(value for _,value in panel.line.values)
+    assert sum(value for _,value in panel.line.values) == 1

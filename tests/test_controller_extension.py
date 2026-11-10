@@ -550,6 +550,52 @@ def test_sync_anilist_without_account_reports(tmp_path, app, monkeypatch):
     assert "No AniList account" in synced.calls[0][0]["message"]
 
 
+def test_activity_refresh_preserves_cache_on_failure_and_throttles(tmp_path, app, monkeypatch):
+    ctrl = make_controller(tmp_path)
+    ctrl.switch_anilist_account("Alice")
+    ctrl.watchlog.set_activity({"items": [], "fetched_at": 1})
+    attempts = []
+    class Client:
+        def __init__(self, **kwargs):
+            self._session = type("Session", (), {"close": lambda self: None})()
+        def fetch_user_activity(self, account):
+            attempts.append(account)
+            raise RuntimeError("offline")
+    class Thread:
+        def __init__(self, target, **kwargs): self.target = target
+        def start(self): self.target()
+    monkeypatch.setattr("src.core.controller.AniListClient", Client)
+    monkeypatch.setattr("src.core.controller.threading.Thread", Thread)
+    ctrl.refresh_activity_stats()
+    ctrl.refresh_activity_stats()
+    assert attempts == ["Alice"]
+    assert ctrl.watchlog.activity() == {"items": [], "fetched_at": 1}
+    ctrl.refresh_activity_stats(force=True)
+    assert attempts == ["Alice", "Alice"]
+
+
+def test_activity_refresh_ignores_result_after_profile_switch(tmp_path, app, monkeypatch):
+    ctrl = make_controller(tmp_path)
+    ctrl.switch_anilist_account("Alice")
+    old_log = ctrl.watchlog
+    pending = []
+    class Client:
+        def __init__(self, **kwargs):
+            self._session = type("Session", (), {"close": lambda self: None})()
+        def fetch_user_activity(self, account):
+            return {"items": [], "account": account, "fetched_at": time.time()}
+    class Thread:
+        def __init__(self, target, **kwargs): pending.append(target)
+        def start(self): pass
+    monkeypatch.setattr("src.core.controller.AniListClient", Client)
+    monkeypatch.setattr("src.core.controller.threading.Thread", Thread)
+    ctrl.refresh_activity_stats()
+    ctrl.switch_anilist_account("Bob")
+    pending[0]()
+    assert ctrl.watchlog.activity() == {}
+    assert old_log.activity() == {}
+
+
 def test_current_season_mapping():
     from datetime import date
 

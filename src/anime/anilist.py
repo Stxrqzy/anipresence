@@ -7,6 +7,7 @@ retrying once with backoff; results are cached on disk by the caller.
 """
 import logging
 import re
+import time
 from dataclasses import asdict, dataclass, field
 from typing import Optional
 
@@ -28,6 +29,7 @@ query ($search: String, $perPage: Int) {
       description(asHtml: false)
       siteUrl
       episodes
+      duration
       season
       seasonYear
       nextAiringEpisode { airingAt episode }
@@ -51,6 +53,7 @@ query ($id: Int) {
     description(asHtml: false)
     siteUrl
     episodes
+    duration
     season
     seasonYear
     nextAiringEpisode { airingAt episode }
@@ -77,6 +80,7 @@ query ($name: String) {
           coverImage { extraLarge large }
           siteUrl
           episodes
+          duration
           season
           seasonYear
           nextAiringEpisode { airingAt episode }
@@ -106,6 +110,7 @@ query ($userId: Int) {
           coverImage { extraLarge large }
           siteUrl
           episodes
+          duration
           season
           seasonYear
           nextAiringEpisode { airingAt episode }
@@ -127,6 +132,23 @@ query ($name: String) {
     id
     name
     avatar { large }
+  }
+}
+"""
+
+_ACTIVITY_QUERY = """
+query ($userId: Int, $page: Int, $since: Int) {
+  Page(page: $page, perPage: 50) {
+    pageInfo { hasNextPage }
+    activities(userId: $userId, type: ANIME_LIST, sort: ID_DESC, createdAt_greater: $since) {
+      ... on ListActivity {
+        id status progress createdAt
+        media {
+          id type title { romaji english native }
+          duration episodes genres siteUrl coverImage { large }
+        }
+      }
+    }
   }
 }
 """
@@ -186,6 +208,7 @@ class Media:
     is_adult: bool = False
     tags: list = field(default_factory=list)
     banner_url: str = ""
+    duration: Optional[int] = None
 
     @classmethod
     def from_dict(cls, d):
@@ -227,6 +250,7 @@ class Media:
             is_adult=bool(d.get("isAdult") or d.get("is_adult")),
             tags=list(d.get("tags") or []),
             banner_url=d.get("bannerImage") or d.get("banner_url") or "",
+            duration=d.get("duration"),
         )
 
     def display_title(self):
@@ -323,9 +347,14 @@ class AniListClient:
         """Flatten a ``MediaListCollection`` payload into ``{media, status, progress}``."""
         lists = (data.get("MediaListCollection") or {}).get("lists") or []
         results = []
+        seen = set()
         for group in lists:
             for entry in group.get("entries") or []:
                 raw = entry.get("media") or {}
+                if raw.get("id") in seen:
+                    continue
+                if raw.get("id"):
+                    seen.add(raw["id"])
                 results.append(
                     {
                         "media": Media.from_dict(raw) if raw else None,
@@ -345,6 +374,28 @@ class AniListClient:
         """
         data = self._query(_USER_LIST_QUERY, {"name": username})
         return self._parse_list_collection(data)
+
+    def fetch_user_activity(self, username, max_pages=20):
+        """Bounded six-month list-activity snapshot; dates are list-update dates."""
+        user = (self._query(_USER_QUERY, {"name": username}).get("User") or {})
+        if not user.get("id"):
+            raise AniListError("AniList account not found")
+        since = int(time.time()) - 183 * 86400
+        items = {}
+        has_next = False
+        for page in range(1, max_pages + 1):
+            result = self._query(_ACTIVITY_QUERY, {"userId": int(user["id"]), "page": page, "since": since})
+            payload = result.get("Page")
+            if not isinstance(payload, dict):
+                raise AniListError("AniList activity response was incomplete")
+            for item in payload.get("activities") or []:
+                if item.get("id"):
+                    items[str(item["id"])] = item
+            has_next = bool((payload.get("pageInfo") or {}).get("hasNextPage"))
+            if not has_next:
+                break
+        return {"items": list(items.values()), "since": since, "truncated": has_next,
+                "fetched_at": time.time(), "account": user.get("name") or username}
 
     def fetch_viewer(self):
         """Identify the account that owns this token."""

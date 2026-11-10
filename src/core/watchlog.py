@@ -7,6 +7,7 @@ running per-day total and per-title totals, so the dashboard can render the
 watch-time streak and a monthly hours chart.
 """
 import json
+import copy
 import logging
 import threading
 import time
@@ -37,6 +38,8 @@ class WatchLog:
         self._days = {}      # "YYYY-MM-DD" -> seconds watched that day
         self._titles = {}    # title -> dict(seconds, episode, website, url, last_watched)
         self._sections = {}  # AniList list label ("Watching"/"Planning"/...) -> entries
+        self._activity = {}
+        self._episodes = {}
         self._load()
 
     def _load(self):
@@ -47,6 +50,8 @@ class WatchLog:
             if isinstance(data, dict):
                 self._days = {k: float(v) for k, v in data.get("days", {}).items()}
                 self._titles = data.get("titles", {})
+                self._activity = data.get("activity") or {}
+                self._episodes = data.get("local_episodes") or {}
                 self._sections = {
                     k: list(v) for k, v in (data.get("sections", {}) or {}).items()
                 }
@@ -62,6 +67,8 @@ class WatchLog:
                         "days": self._days,
                         "titles": self._titles,
                         "sections": self._sections,
+                        "activity": self._activity,
+                        "local_episodes": self._episodes,
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -71,7 +78,7 @@ class WatchLog:
         except OSError as exc:
             logger.debug("watchlog save failed: %s", exc)
 
-    def add(self, title, episode, website, url, cover, seconds):
+    def add(self, title, episode, website, url, cover, seconds, media_id=None):
         """Roll *seconds* into today's total and the per-title total."""
         if seconds <= 0 or not title:
             return
@@ -102,6 +109,13 @@ class WatchLog:
             if cover:
                 entry["cover"] = cover
             entry["last_watched"] = time.time()
+            if media_id:
+                entry["media_id"] = int(media_id)
+            if episode:
+                key = f"{media_id or title.casefold()}:{episode}"
+                playback = self._episodes.setdefault(key, {"title": title, "media_id": media_id,
+                                                           "episode": episode, "days": {}})
+                playback["days"][day] = playback["days"].get(day, 0)+seconds
             self._save()
 
     def remove_title(self, title):
@@ -109,7 +123,13 @@ class WatchLog:
         title = str(title)
         with self._lock:
             entry = self._titles.pop(title, None)
+            self._episodes = {k: e for k, e in self._episodes.items() if e.get("title") != title}
+            media_id = entry.get("media_id") if entry else None
+            self._activity["items"] = [e for e in self._activity.get("items", [])
+                if not ((media_id and (e.get("media") or {}).get("id") == media_id)
+                        or title in ((e.get("media") or {}).get("title") or {}).values())]
             if entry is None:
+                self._save()
                 return
             for day, seconds in (entry.get("days") or {}).items():
                 remaining = self._days.get(day, 0.0) - seconds
@@ -140,6 +160,7 @@ class WatchLog:
                 if prev:
                     entry["seconds"] = max(0.0, entry.get("seconds", 0.0) - prev)
                 entry.pop("source", None)
+                entry.pop("imported_progress", None)
             # 2) Seed the fresh snapshot.
             for item in entries:
                 title = str(item.get("title") or "").strip()
@@ -150,8 +171,11 @@ class WatchLog:
                 entry["seconds"] = entry.get("seconds", 0.0) + seconds
                 entry["imported_seconds"] = float(entry.get("imported_seconds", 0.0)) + seconds
                 entry["source"] = "anilist"
+                if item.get("media_id"):
+                    entry["media_id"] = int(item["media_id"])
                 if item.get("episode"):
                     entry["episode"] = item["episode"]
+                    entry["imported_progress"] = item["episode"]
                 if item.get("website"):
                     entry["website"] = item["website"]
                 if item.get("url"):
@@ -183,7 +207,24 @@ class WatchLog:
         with self._lock:
             self._days = {}
             self._titles = {}
+            self._activity = {}
+            self._episodes = {}
             self._save()
+
+    def set_activity(self, snapshot):
+        with self._lock:
+            self._activity = copy.deepcopy(snapshot)
+            self._save()
+
+    def activity(self):
+        with self._lock:
+            return copy.deepcopy(self._activity)
+
+    def analytics(self):
+        from .activity_stats import reconcile
+        with self._lock:
+            values = copy.deepcopy((self._titles, self._days, self._episodes, self._activity))
+        return reconcile(*values)
 
     # ------------------------------------------------------------ read side
     def days(self):

@@ -15,6 +15,13 @@ from the page title.
 
 ### Version 3.0 interface
 
+Version 3.0.2 adds **Refresh AniList** on Statistics and refreshes activity on
+opening that page and every five minutes while it is visible. Up to 1,000 feed
+entries from the past 183 days are cached per account; failed refreshes keep the
+last snapshot. The top-left Orbit wordmark follows the selected accent and light/
+dark theme. Windows shortcuts and taskbar use a stable app identity and a dedicated
+Orbit icon file; the installer refreshes matching pinned shortcut icons.
+
 Version 3.0.1 aligns the sidebar with the page banners, uses consistent page
 gutters, and keeps the Overview preview compact. The Orbit wordmark appears in
 the sidebar and opening screens; the transparent purple A-and-swoosh brands the
@@ -28,9 +35,15 @@ with episode progress and scores, and reorganized Settings cards.
 - **History:** search and filter by anime, status and date; group entries by day.
   Up to 1,000 recent episodes are retained. Timing is recorded for new playback;
   older entries without timing are not marked completed or given invented progress.
-- **Statistics:** weekly and monthly local-playback charts, genre share, top anime,
-  and date-range summaries. Imported totals count in All time; recorded episode
-  counts come from retained local history. **View all titles** opens detailed lists.
+- **Statistics:** weekly/monthly charts, genre share, top anime and date ranges
+  combine measured playback with AniList feed estimates. Feed dates are list-update
+  dates, and grouped episodes share that date. Estimates use the anime's episode
+  duration (24 minutes if unavailable). Known local episodes replace feed estimates;
+  overlapping ranges are deduplicated. Legacy logs without episode IDs use a
+  conservative same-title/day overlap deduction. Reconciled list totals contribute
+  to All time without being added again; undated completion/planning events never
+  invent daily playback. Episode counts cover unique recorded/feed episodes, not
+  rewatches or complete lifetime history. **View all titles** opens detailed lists.
 - **Activity log:** persistent local events, text/type/date filters, event details,
   pagination and CSV export. Clear removes the saved activity journal too.
 - **Classic** remains available through Settings → Appearance.

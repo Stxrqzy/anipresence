@@ -53,6 +53,8 @@ def main():
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
+    from src.windows_identity import configure_taskbar_identity
+    configure_taskbar_identity()
     app = QApplication(sys.argv)
     app.setApplicationName("AniPresence")
     from src.logo import logo_icon

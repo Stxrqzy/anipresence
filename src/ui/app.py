@@ -2334,8 +2334,8 @@ class MainWindow(QMainWindow):
         self.import_btn = QPushButton("Import from AniList")
         self.import_btn.setObjectName("ghost")
         self.import_btn.setToolTip(
-            "Seed per-title watch time from your public AniList list "
-            "(username in Controls). Does not affect the daily chart."
+            "Refresh AniList list totals and available activity. Daily charts combine "
+            "measured playback with clearly identified feed-based estimates."
         )
         self.import_btn.clicked.connect(self._on_import_anilist)
 
@@ -2351,6 +2351,10 @@ class MainWindow(QMainWindow):
         chart_header.addStretch(1)
         chart_header.addWidget(self.import_btn)
         cc.addLayout(chart_header)
+        source_hint = QLabel("Measured playback + AniList estimates · Feed dates are list-update dates.")
+        source_hint.setObjectName("subLabel")
+        source_hint.setWordWrap(True)
+        cc.addWidget(source_hint)
         self._chart_view = None
         self._chart_hint = None
         if QTCHARTS_OK:
@@ -3111,6 +3115,7 @@ class MainWindow(QMainWindow):
         self.import_btn.setText("Import from AniList")
         self._refresh_stats()
         self._refresh_continue()
+        self.controller.refresh_activity_stats()
         if message:
             self._notify("AniPresence", message)
 
@@ -3133,6 +3138,14 @@ class MainWindow(QMainWindow):
             self.anilist_sync_status.setText(f"Synced {titles} titles from {account}.")
         else:
             self.anilist_sync_status.setText("Synced.")
+
+    def _on_activity_stats(self, payload):
+        if (payload.get("account") or "").casefold() != self.controller.active_anilist_account.casefold():
+            return
+        self._analytics.sync_button.setEnabled(not payload.get("loading"))
+        self._analytics.sync_button.setText("Refreshing…" if payload.get("loading") else "Refresh AniList")
+        self._analytics.sync_message = payload.get("message") or ""
+        self._refresh_stats()
 
     def _resume_stats_item(self, item):
         url = item.data(Qt.UserRole) or ""
@@ -3387,24 +3400,28 @@ class MainWindow(QMainWindow):
 
     def _refresh_stats(self):
         """Re-read the controller's WatchLog and repaint the Stats tab."""
-        self._analytics.refresh()
+        from datetime import date, timedelta
+        from ..core.activity_stats import streak
+        snapshot = self._analytics.refresh()
         watchlog = self.controller.watchlog
-        self._stat_cards["total"].setText(format_hours(watchlog.total_seconds()))
-        self._stat_cards["streak"].setText(f"{watchlog.current_streak()}d")
-        top = watchlog.top_titles(1)
+        self._stat_cards["total"].setText(format_hours(sum(e["seconds"] for e in snapshot["titles"])))
+        self._stat_cards["total"].setToolTip("Measured playback plus reconciled AniList estimates; feed dates are list updates.")
+        self._stat_cards["streak"].setText(f"{streak(snapshot['days'])}d")
+        top = snapshot["titles"][:1]
         self._stat_cards["most"].setText(top[0]["title"] if top else "—")
         self._stat_cards["most"].setToolTip(top[0]["title"] if top else "No watch time recorded yet")
-        self._stat_cards["titles"].setText(str(len(watchlog.titles())))
+        self._stat_cards["titles"].setText(str(len(snapshot["titles"])))
 
         if self._chart_view is not None:
-            self._update_stats_chart(watchlog.last_n_days(14))
+            dates = [(date.today()-timedelta(days=i)).isoformat() for i in range(13,-1,-1)]
+            self._update_stats_chart([(d, snapshot["days"].get(d,0)) for d in dates])
 
         self._refresh_sections()
 
         view = self._stats_list.view_state()
         self._stats_list.clear()
         self._stats_icon_pending.clear()
-        titles = watchlog.top_titles(None)
+        titles = snapshot["titles"]
         if not titles:
             item = QListWidgetItem("No watch time recorded yet — play an anime and it'll show up here.")
             item.setFlags(Qt.NoItemFlags)
@@ -3501,6 +3518,7 @@ class MainWindow(QMainWindow):
         self._sync_navigation(index)
         if index == self._stats_tab_index:
             self._refresh_stats()
+            self.controller.refresh_activity_stats()
         if index == self._library_tab_index:
             self._on_refresh_library()
         if index == 5:
@@ -3546,6 +3564,7 @@ class MainWindow(QMainWindow):
         self.bridge.recent.connect(self._on_recent)
         self.bridge.recent.connect(self._on_recent_also_stats)
         self.bridge.stats_imported.connect(self._on_stats_imported)
+        self.bridge.activity_stats.connect(self._on_activity_stats)
         self.bridge.account_avatar.connect(self._on_account_avatar)
         self.bridge.library_loaded.connect(self._on_library_loaded)
         self.bridge.anilist_synced.connect(self._on_anilist_synced)
@@ -3693,6 +3712,7 @@ class MainWindow(QMainWindow):
         self._page_heading.accent = self.cfg.data.accent
         self._page_heading.light = self._applied_theme == "light"
         self._page_heading.update()
+        self._brand.configure(self.cfg.data.accent, self._applied_theme)
         self._sync_navigation(self.tabbar.currentIndex())
         if getattr(self, "_chart_view", None) is not None and hasattr(self, "_chart_days"):
             self._update_stats_chart(self._chart_days)
@@ -3837,7 +3857,7 @@ class MainWindow(QMainWindow):
         self._tab_anim_stop()
         for sig in (self.bridge.chrome_status, self.bridge.discord_status,
                     self.bridge.detection, self.bridge.recent, self.bridge.log,
-                    self.bridge.stats_imported, self.bridge.account_avatar,
+                    self.bridge.stats_imported, self.bridge.activity_stats, self.bridge.account_avatar,
                     self.bridge.library_loaded, self.bridge.anilist_synced,
                     self.bridge.anilist_sync_status, self.bridge.anilist_login,
                     self.bridge.update_status, self.bridge.calendar_loaded,

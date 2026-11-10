@@ -4,7 +4,7 @@ import time
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 
-from PySide6.QtCore import Qt, QRectF, QPointF, Signal
+from PySide6.QtCore import Qt, QRectF, QPointF, Signal, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QLinearGradient
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
@@ -267,7 +267,7 @@ class MetricChart(QWidget):
         for i in range(5):
             y=area.bottom()-area.height()*i/4
             p.setPen(QColor(130,120,170,38)); p.drawLine(QPointF(area.left(),y),QPointF(area.right(),y))
-            p.setPen(text); p.drawText(QRectF(0,y-9,32,18),Qt.AlignRight,f"{maximum*i/4:.0f}h")
+            p.setPen(text); p.drawText(QRectF(0,y-9,32,18),Qt.AlignRight,f"{maximum*i/4:.2g}h")
         step=area.width()/len(values); points=[]
         for i,(name,value) in enumerate(values):
             x=area.left()+step*(i+.5); y=area.bottom()-value/maximum*area.height(); points.append(QPointF(x,y))
@@ -291,16 +291,20 @@ class AnalyticsPanel(QWidget):
     def __init__(self, controller, cover_path):
         super().__init__(); self.controller=controller; self.cover_path=cover_path
         layout=QVBoxLayout(self); layout.setContentsMargins(0,0,0,0); layout.setSpacing(16)
-        toolbar=QHBoxLayout(); toolbar.addWidget(label("Your viewing, at a glance"),1)
+        layout.addWidget(label("Your viewing, at a glance"))
+        toolbar=QHBoxLayout(); toolbar.addStretch(1)
         self.period=combo(["All time","Last 7 days","Last 30 days","Last 90 days"]); toolbar.addWidget(self.period)
+        self.sync_button = button("Refresh AniList", self.sync_anilist)
+        toolbar.addWidget(self.sync_button)
+        self.sync_message = ""
         toolbar.addWidget(button("View all titles",self.view_all.emit)); layout.addLayout(toolbar)
         self.summary=QGridLayout(); self.metrics={}; self.metric_frames=[]
-        for i,(key,title) in enumerate((("time","Total watch time"),("episodes","Episodes in history"),("anime","Anime watched"),("streak","Current streak"))):
+        for i,(key,title) in enumerate((("time","Watch time · Includes estimates"),("episodes","Recorded unique episodes"),("anime","Anime watched"),("streak","Activity streak"))):
             frame,body=card(title); value=label("—","metricValue"); body.insertWidget(0,value)
             self.metrics[key]=value; self.metric_frames.append(frame); self.summary.addWidget(frame,0,i)
         layout.addLayout(self.summary)
         self.charts=QGridLayout(); self.frames=[]
-        for title,mode in (("Weekly watch time · Local playback","bars"),("Monthly watch time · Last six months","line"),("Genre distribution · Watch time","donut")):
+        for title,mode in (("Weekly watch time · Measured + estimated","bars"),("Monthly watch time · Measured + estimated","line"),("Genre distribution · Watch time","donut")):
             frame,body=card(title); chart=MetricChart(mode); body.addWidget(chart)
             self.frames.append(frame); setattr(self,mode,chart)
         top,body=card("Top anime · Most watched")
@@ -309,12 +313,26 @@ class AnalyticsPanel(QWidget):
         body.addWidget(self.top); self.frames.append(top)
         for i,frame in enumerate(self.frames):self.charts.addWidget(frame,i//2,i%2)
         layout.addLayout(self.charts)
-        self.note=label("Daily and monthly charts use local playback only. Imported totals are included in All time.")
+        self.note=label("")
         layout.addWidget(self.note)
         self.period.currentIndexChanged.connect(self.refresh)
+        self.sync_timer = QTimer(self)
+        self.sync_timer.setInterval(300000)
+        self.sync_timer.timeout.connect(lambda: self.controller.refresh_activity_stats() if self.isVisible() else None)
+        self.sync_timer.start()
+
+    def sync_anilist(self):
+        if not self.controller.active_anilist_account:
+            self.window()._on_import_anilist()
+            return
+        self.controller.sync_anilist()
+        self.controller.refresh_activity_stats(force=True)
 
     def refresh(self,*_):
-        log=self.controller.watchlog; titles=log.top_titles(None)
+        from ..core.activity_stats import streak
+        log=self.controller.watchlog
+        snapshot=log.analytics()
+        titles=snapshot["titles"]
         days=(None,7,30,90)[self.period.currentIndex()]
         cutoff=(date.today()-timedelta(days=days-1)).isoformat() if days else ""
         if days:
@@ -322,16 +340,17 @@ class AnalyticsPanel(QWidget):
             titles=[e for e in titles if e["seconds"]>0]
         titles.sort(key=lambda e:e.get("seconds",0),reverse=True)
         total=sum(e.get("seconds",0) for e in titles)
-        recent=self.controller.recent.items()
-        if days: recent=[e for e in recent if (e.get("last_watched") or 0)>=time.time()-days*86400]
         self.metrics["time"].setText(format_hours(total))
         self.metrics["anime"].setText(str(len(titles)))
-        self.metrics["episodes"].setText(str(len({(e.get("title"),e.get("episode")) for e in recent if e.get("episode")})))
-        self.metrics["streak"].setText(f"{log.current_streak()}d")
-        self.metrics["episodes"].setToolTip("Unique episodes retained in local history; imported episode numbers are not counted as playback events.")
-        self.bars.set_values([(datetime.fromisoformat(d).strftime("%a"),s/3600) for d,s in log.last_n_days(7)])
+        self.metrics["episodes"].setText(str(sum(1 for day in snapshot["episodes"].values() if day >= cutoff)))
+        self.metrics["streak"].setText(f"{streak(snapshot['days'])}d")
+        self.metrics["episodes"].setToolTip("Unique episodes in recorded playback and the available AniList feed. Rewatches are not counted twice; list totals alone have no dated episode events.")
+        self.metrics["streak"].setToolTip("Current streak from measured playback and AniList list-update dates, independent of the selected range.")
+        chart_days = {d:s for d,s in snapshot["days"].items() if d >= cutoff}
+        weekly = [date.today()-timedelta(days=i) for i in range(6,-1,-1)]
+        self.bars.set_values([(d.strftime("%a"),chart_days.get(d.isoformat(),0)/3600) for d in weekly])
         monthly=defaultdict(float)
-        for d,s in log.days().items(): monthly[d[:7]]+=s/3600
+        for d,s in chart_days.items(): monthly[d[:7]]+=s/3600
         months=[]; year,month=date.today().year,date.today().month
         for offset in range(5,-1,-1):
             absolute=year*12+month-1-offset; y,m=divmod(absolute,12)
@@ -340,7 +359,7 @@ class AnalyticsPanel(QWidget):
         genres_by_title={e.get("title"):e.get("genres") or [] for entries in log.anilist_sections().values() for e in entries}
         genres=defaultdict(float)
         for e in titles:
-            tags=genres_by_title.get(e["title"]) or ["Unknown"]
+            tags=genres_by_title.get(e["title"]) or e.get("genres") or ["Unknown"]
             for tag in tags:genres[tag]+=e.get("seconds",0)/len(tags)
         ordered=sorted(genres.items(),key=lambda pair:pair[1],reverse=True)
         if len(ordered)>6:ordered=ordered[:6]+[("Other",sum(v for _,v in ordered[6:]))]
@@ -350,6 +369,19 @@ class AnalyticsPanel(QWidget):
             entry=dict(e,rank=i+1,share=(e.get("seconds",0)/total if total else 0),cached_cover=str(self.cover_path(e.get("cover") or "")))
             item=QListWidgetItem(e["title"]); item.setData(Qt.UserRole,e.get("url") or ""); item.setData(Qt.UserRole+1,entry)
             item.setData(DETAIL_ROLE,f"{format_hours(e.get('seconds',0))} watched · {entry['share']:.1%}"); self.top.addItem(item)
+        estimated = sum(sum(v for d,v in e.get("estimated_days",{}).items() if d>=cutoff)
+                        if days else e.get("estimated_seconds",0) for e in titles)
+        feed = snapshot["feed"]
+        status = ("Last feed refresh: " + datetime.fromtimestamp(feed["fetched_at"]).strftime("%b %d, %H:%M")
+                  if feed.get("fetched_at") else "No AniList feed cached yet. Add an account and refresh AniList.")
+        if feed.get("truncated"):
+            status += " · Limited to the newest 1,000 activity entries."
+        self.note.setText(f"{format_hours(estimated)} estimated in this range. Local episode timing takes priority. "
+                         "Feed dates are list-update dates; grouped episodes share that date. "
+                         "Up to six months of available activity; missing durations use 24 min. "
+                         "All-time list totals are reconciled, not added again. " + status +
+                         ("\n"+self.sync_message if self.sync_message else ""))
+        return snapshot
 
     def resizeEvent(self,event):
         columns=1 if self.width()<800 else 2
