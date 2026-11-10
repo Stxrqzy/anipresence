@@ -56,6 +56,7 @@ def history_status(entry):
 class HistoryPanel(QWidget):
     activated = Signal(object)
     clear_requested = Signal()
+    refresh_requested = Signal()
 
     def __init__(self, cover_path):
         super().__init__()
@@ -64,13 +65,14 @@ class HistoryPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0,0,0,0)
         layout.setSpacing(14)
-        filters = QHBoxLayout()
+        filters = QGridLayout()
+        self.filters = filters
         self.search = QLineEdit(); self.search.setPlaceholderText("Search history…"); self.search.setClearButtonEnabled(True)
         self.anime = combo(["All anime"])
         self.status = combo(["All status", "Watched", "Completed"])
         self.period = combo(["All time", "Last 7 days", "Last 30 days", "Last 90 days"])
-        filters.addWidget(self.search, 2)
-        for control in (self.anime, self.status, self.period): filters.addWidget(control, 1)
+        self.filter_controls = [self.search, self.anime, self.status, self.period]
+        for i, control in enumerate(self.filter_controls): filters.addWidget(control, 0, i)
         layout.addLayout(filters)
         frame, body = card("Watch history")
         toolbar = QHBoxLayout()
@@ -78,14 +80,30 @@ class HistoryPanel(QWidget):
         toolbar.addWidget(self.count); toolbar.addStretch()
         self.order = combo(["Newest first", "Oldest first"])
         toolbar.addWidget(self.order)
+        self.sync_button = button("Refresh AniList", self.refresh_requested.emit)
+        toolbar.addWidget(self.sync_button)
         toolbar.addWidget(button("Clear history", self.clear_requested.emit))
         body.addLayout(toolbar)
+        self.note = label("Local playback + AniList feed · Feed dates are list-update dates.")
+        body.addWidget(self.note)
         self.list = AnimeList(); self.list.setProperty("variant", "history")
         self.list.itemActivated.connect(lambda item: self.activated.emit(item.data(Qt.UserRole + 1)))
         body.addWidget(self.list, 1)
         layout.addWidget(frame, 1)
         self.search.textChanged.connect(self.refresh)
         for control in (self.anime, self.status, self.period, self.order): control.currentIndexChanged.connect(self.refresh)
+
+    def resizeEvent(self, event):
+        for control in self.filter_controls:
+            self.filters.removeWidget(control)
+        if self.width() < 700:
+            self.filters.addWidget(self.search, 0, 0, 1, 3)
+            for i, control in enumerate(self.filter_controls[1:]):
+                self.filters.addWidget(control, 1, i)
+        else:
+            for i, control in enumerate(self.filter_controls):
+                self.filters.addWidget(control, 0, i)
+        super().resizeEvent(event)
 
     def set_entries(self, entries):
         self.entries = list(entries)
@@ -118,7 +136,8 @@ class HistoryPanel(QWidget):
             e = dict(entry, cached_cover=str(self.cover_path(entry.get("cover") or "")))
             item = QListWidgetItem(e.get("title") or "Unknown")
             item.setData(Qt.UserRole + 1, e)
-            item.setData(DETAIL_ROLE, f"Episode {e.get('episode') or '—'} · {history_status(e)}" +
+            source = "AniList feed" if e.get("history_source") == "AniList feed" else history_status(e)
+            item.setData(DETAIL_ROLE, f"Episode {e.get('episode') or '—'} · {source}" +
                          (f" · {datetime.fromtimestamp(stamp):%b %d · %H:%M}" if stamp else ""))
             self.list.addItem(item)
         self.count.setText(f"{len(entries)} entries" if entries else "No matching history. Play an anime or adjust your filters.")
@@ -318,7 +337,8 @@ class AnalyticsPanel(QWidget):
         self.period.currentIndexChanged.connect(self.refresh)
         self.sync_timer = QTimer(self)
         self.sync_timer.setInterval(300000)
-        self.sync_timer.timeout.connect(lambda: self.controller.refresh_activity_stats() if self.isVisible() else None)
+        self.sync_timer.timeout.connect(lambda: self.controller.refresh_activity_stats()
+                                       if self.window().isVisible() and self.window().stack.currentIndex() in (1, 3) else None)
         self.sync_timer.start()
 
     def sync_anilist(self):

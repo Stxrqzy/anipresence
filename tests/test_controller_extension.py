@@ -596,6 +596,22 @@ def test_activity_refresh_ignores_result_after_profile_switch(tmp_path, app, mon
     assert old_log.activity() == {}
 
 
+def test_remove_history_aliases_and_clear_feed_are_persistent(tmp_path, app):
+    from test_history import snapshot
+    from src.core.watchlog import WatchLog
+    ctrl = make_controller(tmp_path)
+    ctrl.watchlog.set_activity(snapshot())
+    ctrl.recent.add({"title": "naruto", "episode": 1, "website": "A"})
+    ctrl.recent.add({"title": " NARUTO ", "episode": 1, "website": "B"})
+    combined = ctrl.watchlog.history(ctrl.recent.items())
+    ctrl.remove_recent_entry(next(e for e in combined if e["episode"] == 1))
+    assert ctrl.recent.items() == []
+    assert {e["episode"] for e in ctrl.watchlog.history([])} == {2, 3}
+    ctrl.clear_recent()
+    assert WatchLog(ctrl.watchlog._path).history([]) == []
+    assert len(ctrl.watchlog.analytics()["episodes"]) == 3
+
+
 def test_current_season_mapping():
     from datetime import date
 

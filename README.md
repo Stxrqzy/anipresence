@@ -15,6 +15,14 @@ from the page title.
 
 ### Version 3.0 interface
 
+Version 3.0.3 brings **AniList feed episodes into Watch History** in both layouts,
+with refresh on page entry and every five minutes while History or Statistics is
+visible. Feed rows show list-update dates; local playback timing and watch links
+take priority. Matching AniList IDs and normalized title aliases merge duplicate
+anime/episode rows, including capitalization differences, without double-counting
+imported totals. Clearing or removing feed history persists per account. The
+bottom-left profile button now shows the active account's circular AniList avatar.
+
 Version 3.0.2 adds **Refresh AniList** on Statistics and refreshes activity on
 opening that page and every five minutes while it is visible. Up to 1,000 feed
 entries from the past 183 days are cached per account; failed refreshes keep the
@@ -33,7 +41,8 @@ a branded sidebar and account shortcut, animated switches, richer library rows
 with episode progress and scores, and reorganized Settings cards.
 
 - **History:** search and filter by anime, status and date; group entries by day.
-  Up to 1,000 recent episodes are retained. Timing is recorded for new playback;
+  Up to 1,000 local episodes are retained, alongside available AniList feed episodes.
+  Timing is recorded for new playback;
   older entries without timing are not marked completed or given invented progress.
 - **Statistics:** weekly/monthly charts, genre share, top anime and date ranges
   combine measured playback with AniList feed estimates. Feed dates are list-update
@@ -66,7 +75,7 @@ with episode progress and scores, and reorganized Settings cards.
   (the token makes this work for private profiles too) and pushes episode
   progress after an episode reaches 90% playback; progress is never lowered.
 - **Account indicator** — the active AniList account shows its profile picture
-  next to the account selector, so you always know whose watch history/stats
+  in the sidebar and next to the account selector, so you know whose feed/stats
   you're looking at.
 - **Rich Presence** — AniList cover art (highest-resolution variant) as the large
   image, `Watching: <Title>`, `Episode N of M · Next: Ep N+1 · Fri` (episode

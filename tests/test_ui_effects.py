@@ -22,8 +22,8 @@ def make_window(tmp_path, monkeypatch):
     monkeypatch.setattr("src.ui.app.APP_DIR", tmp_path)
     for method in ("_build_tray", "_install_resize_filter", "_apply_native_window_styles", "_apply_backdrop"):
         monkeypatch.setattr(MainWindow, method, lambda *args: None)
-    for method in ("refresh_library", "refresh_calendar", "fetch_account_avatar"):
-        monkeypatch.setattr(Controller, method, lambda *args: None)
+    for method in ("refresh_library", "refresh_calendar", "fetch_account_avatar", "refresh_activity_stats"):
+        monkeypatch.setattr(Controller, method, lambda *args, **kwargs: None)
     windows = []
 
     def create(**settings):
@@ -70,6 +70,70 @@ def test_startup_update_is_immediate_and_surfaces_available_release(make_window,
     app.processEvents()
     assert len(requests) == 1
     assert not window._update_banner.isHidden()
+
+
+def test_feed_history_updates_both_layouts_and_preserves_episode_selection(make_window):
+    from PySide6.QtCore import Qt
+    from test_history import snapshot
+    app, window = make_window(smooth_animations=False)
+    ctrl = window.controller
+    ctrl.switch_anilist_account("Alice")
+    ctrl.watchlog.set_activity(snapshot())
+    ctrl.recent.add({"title": "naruto", "episode": 2, "url": "https://watch/2"})
+    window._on_activity_stats({"account": "Alice", "loading": False})
+    panel = window._history_modern
+    assert len(panel.entries) == 3
+    assert window.recent_list.count() == 3
+    assert {e["title"] for e in panel.entries} == {"NARUTO"}
+    for i in range(panel.list.count()):
+        entry = panel.list.item(i).data(Qt.UserRole + 1)
+        if entry and entry["episode"] == 3:
+            panel.list.setCurrentRow(i)
+    window._on_activity_stats({"account": "Alice", "loading": False})
+    assert panel.list.currentItem().data(Qt.UserRole + 1)["episode"] == 3
+    ctrl.switch_anilist_account("Bob")
+    window._populate_anilist_accounts()
+    assert len(panel.entries) == 1  # shared local playback, no Alice feed
+    window._on_activity_stats({"account": "Alice", "loading": False})
+    assert len(panel.entries) == 1
+
+
+def test_sidebar_avatar_switch_rejects_stale_metadata_and_image(make_window, monkeypatch, tmp_path):
+    from PySide6.QtCore import QSize, QUrl
+    from PySide6.QtGui import QColor, QPixmap
+    from PySide6.QtNetwork import QNetworkReply, QNetworkRequest
+    app, window = make_window(anilist_accounts=["Alice", "Bob"], anilist_username="Alice")
+    monkeypatch.setattr(window._nam, "get", lambda request: None)
+    alice_url, bob_url = "https://avatar/alice", "https://avatar/bob"
+    window._on_account_avatar("Alice", alice_url)
+    assert alice_url in window._avatar_pending_reply
+    window.anilist_combo.setCurrentIndex(window.anilist_combo.findData("Bob"))
+    assert "Bob" in window._sidebar_account.text()
+    assert window._account_avatar_url == ""
+    window._on_account_avatar("Alice", alice_url)
+    assert window._account_avatar_url == ""
+    pixmap = QPixmap(50, 50)
+    pixmap.fill(QColor("#12cd45"))
+    window._cover_cache_dir.mkdir(parents=True, exist_ok=True)
+    pixmap.save(str(window._cover_cache_path(bob_url)), "PNG")
+    window._on_account_avatar("Bob", bob_url)
+    bob = window._sidebar_account.icon().pixmap(QSize(34, 34)).toImage()
+    assert bob.pixelColor(17, 17) == QColor("#12cd45")
+    assert bob.pixelColor(0, 0).alpha() == 0
+    pixmap.fill(QColor("red"))
+    path = tmp_path / "alice.png"
+    pixmap.save(str(path))
+    class Reply:
+        def request(self): return QNetworkRequest(QUrl(alice_url))
+        def error(self): return QNetworkReply.NoError
+        def readAll(self): return path.read_bytes()
+        def deleteLater(self): pass
+    window._on_cover_reply(Reply())
+    assert window._sidebar_account.icon().pixmap(QSize(34, 34)).toImage() == bob
+    assert window.account_avatar.pixmap().toImage() == bob
+    window.anilist_combo.setCurrentIndex(0)
+    assert "Default profile" in window._sidebar_account.text()
+    assert window._sidebar_account.icon().pixmap(QSize(34, 34)).toImage() != bob
 
 
 def test_automatic_updates_respect_opt_out_busy_and_downloaded_state(make_window, monkeypatch):

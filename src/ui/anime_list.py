@@ -135,7 +135,9 @@ class AnimeList(QListWidget):
     @staticmethod
     def _identity(item):
         entry = item.data(Qt.UserRole + 1) if item else None
-        return (entry.get("url"), entry.get("title")) if isinstance(entry, dict) else None
+        if not isinstance(entry, dict):
+            return None
+        return tuple(entry["history_key"]) if entry.get("history_key") else (entry.get("url"), entry.get("title"), entry.get("episode"))
 
     def view_state(self):
         return self._identity(self.currentItem()), self.verticalScrollBar().value()

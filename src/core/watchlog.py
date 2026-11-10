@@ -40,6 +40,8 @@ class WatchLog:
         self._sections = {}  # AniList list label ("Watching"/"Planning"/...) -> entries
         self._activity = {}
         self._episodes = {}
+        self._history_cleared_before = 0
+        self._history_dismissed = []
         self._load()
 
     def _load(self):
@@ -52,6 +54,8 @@ class WatchLog:
                 self._titles = data.get("titles", {})
                 self._activity = data.get("activity") or {}
                 self._episodes = data.get("local_episodes") or {}
+                self._history_cleared_before = data.get("history_cleared_before") or 0
+                self._history_dismissed = data.get("history_dismissed") or []
                 self._sections = {
                     k: list(v) for k, v in (data.get("sections", {}) or {}).items()
                 }
@@ -69,6 +73,8 @@ class WatchLog:
                         "sections": self._sections,
                         "activity": self._activity,
                         "local_episodes": self._episodes,
+                        "history_cleared_before": self._history_cleared_before,
+                        "history_dismissed": self._history_dismissed,
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -77,6 +83,14 @@ class WatchLog:
             )
         except OSError as exc:
             logger.debug("watchlog save failed: %s", exc)
+
+    def _title_storage_key(self, title, identity):
+        """Keep distinct explicit IDs even when AniList gives them the same title."""
+        from .media_identity import media_id
+        existing = self._titles.get(title, {})
+        if identity and media_id(existing) and media_id(existing) != int(identity):
+            return f"{title} [AniList {identity}]"
+        return title
 
     def add(self, title, episode, website, url, cover, seconds, media_id=None):
         """Roll *seconds* into today's total and the per-title total."""
@@ -87,8 +101,9 @@ class WatchLog:
         with self._lock:
             self._days[day] = self._days.get(day, 0.0) + seconds
             entry = self._titles.setdefault(
-                title,
+                self._title_storage_key(title, media_id),
                 {
+                    "title": title,
                     "seconds": 0.0,
                     "episode": episode,
                     "website": website,
@@ -120,23 +135,27 @@ class WatchLog:
 
     def remove_title(self, title):
         """Drop one title and subtract its seconds from the daily totals."""
-        title = str(title)
+        target = title if isinstance(title, dict) else {"title": str(title)}
         with self._lock:
-            entry = self._titles.pop(title, None)
-            self._episodes = {k: e for k, e in self._episodes.items() if e.get("title") != title}
-            media_id = entry.get("media_id") if entry else None
+            from .activity_stats import feed_episodes
+            from .media_identity import merge_title_rows
+            references = [e for entries in self._sections.values() for e in entries]
+            _, resolver = merge_title_rows(self._titles, [*references, *feed_episodes(self._activity)])
+            key = resolver.key(target)
+            removed = [name for name, value in self._titles.items()
+                       if resolver.key(dict(value, title=value.get("title") or name)) == key]
+            self._episodes = {k: e for k, e in self._episodes.items() if resolver.key(e) != key}
             self._activity["items"] = [e for e in self._activity.get("items", [])
-                if not ((media_id and (e.get("media") or {}).get("id") == media_id)
-                        or title in ((e.get("media") or {}).get("title") or {}).values())]
-            if entry is None:
-                self._save()
-                return
-            for day, seconds in (entry.get("days") or {}).items():
-                remaining = self._days.get(day, 0.0) - seconds
-                if remaining > 0:
-                    self._days[day] = remaining
-                else:
-                    self._days.pop(day, None)
+                if resolver.key({"media_id": (e.get("media") or {}).get("id"),
+                                 "title": ((e.get("media") or {}).get("title") or {}).get("romaji")}) != key]
+            for name in removed:
+                entry = self._titles.pop(name)
+                for day, seconds in (entry.get("days") or {}).items():
+                    remaining = self._days.get(day, 0.0) - seconds
+                    if remaining > 0:
+                        self._days[day] = remaining
+                    else:
+                        self._days.pop(day, None)
             self._save()
 
     def import_titles(self, entries):
@@ -150,7 +169,15 @@ class WatchLog:
         totals and the grand total, but never toward the daily chart or the
         streak — those stay a record of what you actually watched in the app.
         """
+        from .media_identity import MediaIdentity, media_id
         entries = list(entries or [])
+        resolver = MediaIdentity(entries)
+        unique = {}
+        for item in entries:
+            key = resolver.key(item)
+            if key not in unique or float(item.get("seconds") or 0) > float(unique[key].get("seconds") or 0):
+                unique[key] = item
+        entries = list(unique.values())
         imported = 0
         with self._lock:
             # 1) Roll back every previous import's contribution exactly, leaving
@@ -167,12 +194,14 @@ class WatchLog:
                 seconds = float(item.get("seconds") or 0)
                 if seconds <= 0 or not title:
                     continue
-                entry = self._titles.setdefault(title, {"seconds": 0.0, "days": {}})
+                identity = media_id(item)
+                entry = self._titles.setdefault(self._title_storage_key(title, identity),
+                                                {"title": title, "seconds": 0.0, "days": {}})
                 entry["seconds"] = entry.get("seconds", 0.0) + seconds
                 entry["imported_seconds"] = float(entry.get("imported_seconds", 0.0)) + seconds
                 entry["source"] = "anilist"
-                if item.get("media_id"):
-                    entry["media_id"] = int(item["media_id"])
+                if identity:
+                    entry["media_id"] = identity
                 if item.get("episode"):
                     entry["episode"] = item["episode"]
                     entry["imported_progress"] = item["episode"]
@@ -223,8 +252,32 @@ class WatchLog:
     def analytics(self):
         from .activity_stats import reconcile
         with self._lock:
-            values = copy.deepcopy((self._titles, self._days, self._episodes, self._activity))
+            references = [e for entries in self._sections.values() for e in entries]
+            values = copy.deepcopy((self._titles, self._days, self._episodes, self._activity, references))
         return reconcile(*values)
+
+    def history(self, local):
+        from .history import combined_history
+        with self._lock:
+            references = [dict(value, title=value.get("title") or name) for name, value in self._titles.items()]
+            references.extend(e for entries in self._sections.values() for e in entries)
+            snapshot, references, dismissed = copy.deepcopy((self._activity, references, self._history_dismissed))
+            cutoff = self._history_cleared_before
+        return combined_history(local, snapshot, references, cutoff, dismissed)
+
+    def clear_feed_history(self):
+        with self._lock:
+            self._history_cleared_before = time.time()
+            self._history_dismissed = []
+            self._save()
+
+    def dismiss_history(self, entry):
+        key = entry.get("history_key")
+        if key:
+            with self._lock:
+                if key not in self._history_dismissed:
+                    self._history_dismissed.append(key)
+                self._save()
 
     # ------------------------------------------------------------ read side
     def days(self):
@@ -263,11 +316,9 @@ class WatchLog:
 
     def top_titles(self, limit=10):
         """Most-watched titles, each carrying resume info (url/episode)."""
-        titles = self.titles()
-        ordered = sorted(
-            titles.items(), key=lambda kv: kv[1].get("seconds", 0), reverse=True
-        )
-        return [{"title": name, **data} for name, data in ordered[:limit]]
+        from .media_identity import merge_title_rows
+        rows, _ = merge_title_rows(self.titles())
+        return sorted(rows.values(), key=lambda e: e.get("seconds", 0), reverse=True)[:limit]
 
     def continue_list(self, limit=8):
         """Titles you can resume, most recently watched first.
@@ -276,13 +327,14 @@ class WatchLog:
         'Resume Ep N' jump straight back to the last spot. Entries without a
         resumable URL are skipped.
         """
-        titles = self.titles()
+        from .media_identity import merge_title_rows
+        rows, _ = merge_title_rows(self.titles())
         ordered = sorted(
-            (t for t in titles.items() if t[1].get("url")),
-            key=lambda kv: kv[1].get("last_watched") or 0,
+            (row for row in rows.values() if row.get("url")),
+            key=lambda row: row.get("last_watched") or 0,
             reverse=True,
         )
-        return [{"title": name, **data} for name, data in ordered[:limit]]
+        return ordered[:limit]
 
 
 def format_hours(seconds):

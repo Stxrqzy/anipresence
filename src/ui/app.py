@@ -1395,6 +1395,10 @@ class MainWindow(QMainWindow):
         self._history_modern = HistoryPanel(self._cover_cache_path)
         self._history_modern.activated.connect(lambda entry: webbrowser.open(entry["url"]) if entry and entry.get("url") else None)
         self._history_modern.clear_requested.connect(self._on_clear_history)
+        self._history_modern.refresh_requested.connect(self._refresh_history_feed)
+        self._history_modern.list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._history_modern.list.customContextMenuRequested.connect(
+            lambda pos: self._recent_menu(pos, self._history_modern.list))
         recent_wrapper.addWidget(self._history_modern,1)
         recent_layout.setContentsMargins(m, (6 if not compact else 4), m, m)
         recent_layout.setSpacing(self._gap)
@@ -1402,6 +1406,10 @@ class MainWindow(QMainWindow):
         recent_header.setSpacing(8)
         recent_header.addWidget(self._field_label("Recently watched"))
         recent_header.addStretch(1)
+        self._history_refresh = QPushButton("Refresh AniList")
+        self._history_refresh.setObjectName("ghost")
+        self._history_refresh.clicked.connect(self._refresh_history_feed)
+        recent_header.addWidget(self._history_refresh)
         clear_history_btn = QPushButton("Clear history")
         clear_history_btn.setObjectName("ghost")
         clear_history_btn.setToolTip("Remove every entry from the watch history.")
@@ -1885,6 +1893,7 @@ class MainWindow(QMainWindow):
             self._nav_buttons.append(button)
         self._sidebar_account = QPushButton("Default profile\nAniList · Add an account")
         self._sidebar_account.setObjectName("profileButton")
+        self._sidebar_account.setIconSize(QSize(34, 34))
         self._sidebar_account.clicked.connect(self._show_account_settings)
         nav.addSpacing(14)
         nav.addWidget(self._sidebar_account)
@@ -2187,7 +2196,7 @@ class MainWindow(QMainWindow):
             close.setText("✕")
             close.setToolTip("Remove from continue watching")
             close.setCursor(Qt.PointingHandCursor)
-            close.clicked.connect(lambda _=False, t=title: self._remove_continue(t))
+            close.clicked.connect(lambda _=False, entry=dict(e): self._remove_continue(entry))
             row.addWidget(close)
 
             self._continue_layout.insertWidget(self._continue_layout.count() - 1, tile)
@@ -3078,7 +3087,7 @@ class MainWindow(QMainWindow):
         act_remove = menu.addAction("Remove from stats")
         choice = menu.exec(self._stats_list.viewport().mapToGlobal(pos))
         if choice is act_remove:
-            self.controller.watchlog.remove_title(title)
+            self.controller.watchlog.remove_title(item.data(Qt.UserRole + 1))
             self._refresh_stats()
             self._refresh_continue()
             self._log_line(f"Removed '{title}' from stats.")
@@ -3116,6 +3125,7 @@ class MainWindow(QMainWindow):
         self._refresh_stats()
         self._refresh_continue()
         self.controller.refresh_activity_stats()
+        self._on_recent(self.controller.recent.items())
         if message:
             self._notify("AniPresence", message)
 
@@ -3145,7 +3155,19 @@ class MainWindow(QMainWindow):
         self._analytics.sync_button.setEnabled(not payload.get("loading"))
         self._analytics.sync_button.setText("Refreshing…" if payload.get("loading") else "Refresh AniList")
         self._analytics.sync_message = payload.get("message") or ""
+        self._history_modern.sync_button.setEnabled(not payload.get("loading"))
+        self._history_modern.sync_button.setText("Refreshing…" if payload.get("loading") else "Refresh AniList")
+        self._history_refresh.setEnabled(not payload.get("loading"))
+        self._history_refresh.setText(self._history_modern.sync_button.text())
+        self._history_modern.note.setText(payload.get("message") or "Local playback + AniList feed · Feed dates are list-update dates.")
+        self._on_recent(self.controller.recent.items())
         self._refresh_stats()
+
+    def _refresh_history_feed(self):
+        if not self.controller.active_anilist_account:
+            self._on_import_anilist()
+        else:
+            self.controller.refresh_activity_stats(force=True)
 
     def _resume_stats_item(self, item):
         url = item.data(Qt.UserRole) or ""
@@ -3518,6 +3540,9 @@ class MainWindow(QMainWindow):
         self._sync_navigation(index)
         if index == self._stats_tab_index:
             self._refresh_stats()
+            self.controller.refresh_activity_stats()
+        if index == 1:
+            self._on_recent(getattr(self, "_last_recent", self.controller.recent.items()))
             self.controller.refresh_activity_stats()
         if index == self._library_tab_index:
             self._on_refresh_library()
@@ -3927,28 +3952,44 @@ class MainWindow(QMainWindow):
             idx = self.anilist_combo.findData(active)
             self.anilist_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self._load_account_avatar()
+        if hasattr(self, "_history_modern"):
+            self._on_recent(self.controller.recent.items())
         if hasattr(self,"_sidebar_account"):
             connected=bool(self.cfg.data.anilist_access_token and self.cfg.data.anilist_sync_account==active)
-            self._sidebar_account.setText(f"{active or 'Default profile'}\nAniList · {'Connected' if connected else 'Public profile' if active else 'Add an account'}")
+            self._sidebar_account.setText(f"{active or 'Default profile'}\nAniList · {'Connected' if connected else 'Public' if active else 'Add account'}")
+            self._sidebar_account.setToolTip(f"{active or 'Default profile'} · Account settings")
 
     def _load_account_avatar(self):
         """Request the avatar for the currently active account (monogram while
         it loads, cleared on the shared Default profile)."""
         name = self.controller.active_anilist_account or ""
+        self._account_avatar_url = ""
+        self._set_account_avatar_placeholder(name)
         if not name:
-            self.account_avatar.clear()
-            self.account_avatar.setText("")
-            self._account_avatar_url = ""
             return
-        self.account_avatar.setText(name[:1].upper())
         self.controller.fetch_account_avatar(name)
+
+    def _set_account_avatar_placeholder(self, name):
+        pixmap = QPixmap(34, 34)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(self.cfg.data.accent))
+        painter.drawEllipse(0, 0, 34, 34)
+        painter.setPen(Qt.white)
+        painter.drawText(pixmap.rect(), Qt.AlignCenter, name[:1].upper() or "A")
+        painter.end()
+        self.account_avatar.setPixmap(pixmap)
+        if hasattr(self, "_sidebar_account"):
+            self._sidebar_account.setIcon(QIcon(pixmap))
 
     def _on_account_avatar(self, username, url):
         if username != self.controller.active_anilist_account:
             return  # switched away while the lookup was in flight
         self._account_avatar_url = url or ""
         if not url:
-            self.account_avatar.setText(username[:1].upper())
+            self._set_account_avatar_placeholder(username)
             return
         cached = self._cover_cache_path(url)
         if cached.exists():
@@ -3980,13 +4021,24 @@ class MainWindow(QMainWindow):
         painter.drawPixmap((size - scaled.width()) // 2, (size - scaled.height()) // 2, scaled)
         painter.end()
         self.account_avatar.setPixmap(round_pm)
+        if hasattr(self, "_sidebar_account"):
+            self._sidebar_account.setIcon(QIcon(round_pm))
 
     def _on_anilist_account_switch(self, index):
         name = self.anilist_combo.itemData(index) or ""
         if name != self.controller.active_anilist_account:
             self.controller.switch_anilist_account(name)
             self._refresh_stats()
-        self._load_account_avatar()
+        self._populate_anilist_accounts()
+        self._analytics.sync_button.setEnabled(True)
+        self._analytics.sync_button.setText("Refresh AniList")
+        self._analytics.sync_message = ""
+        self._history_modern.sync_button.setEnabled(True)
+        self._history_modern.sync_button.setText("Refresh AniList")
+        self._history_refresh.setEnabled(True)
+        self._history_refresh.setText("Refresh AniList")
+        self._history_modern.note.setText("Local playback + AniList feed · Feed dates are list-update dates.")
+        self.controller.refresh_activity_stats()
         self._on_refresh_library()
 
     def _on_add_anilist_account(self):
@@ -4491,6 +4543,7 @@ class MainWindow(QMainWindow):
 
     def _on_recent(self, entries):
         self._last_recent = entries
+        entries = self.controller.watchlog.history(entries)
         self._history_modern.set_entries(entries)
         view = self.recent_list.view_state()
         self._recent_icon_pending.clear()
@@ -4508,7 +4561,8 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, entry)
             item.setData(Qt.UserRole + 1, entry)
-            item.setData(DETAIL_ROLE, " · ".join(filter(None, (f"Episode {ep}" if ep else "", site))))
+            source = "AniList feed · List-update date" if entry.get("history_source") == "AniList feed" else site
+            item.setData(DETAIL_ROLE, " · ".join(filter(None, (f"Episode {ep}" if ep else "", source))))
             if not self.cfg.data.privacy_mode:
                 item.setToolTip(entry.get("url") or "")
             cover = entry.get("cover") or ""
@@ -4531,20 +4585,23 @@ class MainWindow(QMainWindow):
         if url:
             webbrowser.open(url)
 
-    def _recent_menu(self, pos):
-        item = self.recent_list.itemAt(pos)
+    def _recent_menu(self, pos, listw=None):
+        listw = self.recent_list if listw is None else listw
+        item = listw.itemAt(pos)
         if item is None:
             return
-        entry = item.data(Qt.UserRole) or {}
+        entry = item.data(Qt.UserRole + 1) or {}
         url = entry.get("url")
-        if not url:
+        if not entry:
             return
         menu = QMenu(self)
         act_open = menu.addAction("Open in browser")
         act_pwa = menu.addAction("Open as PWA")
+        act_open.setEnabled(bool(url))
+        act_pwa.setEnabled(bool(url))
         menu.addSeparator()
         act_remove = menu.addAction("Remove from history")
-        choice = menu.exec(self.recent_list.viewport().mapToGlobal(pos))
+        choice = menu.exec(listw.viewport().mapToGlobal(pos))
         if choice is act_open:
             webbrowser.open(url)
         elif choice is act_pwa:
@@ -4785,7 +4842,8 @@ class MainWindow(QMainWindow):
                         cached.write_bytes(data)
                 except OSError:
                     pass
-                self._set_account_avatar_pixmap(cached)
+                if orig == self._account_avatar_url:
+                    self._set_account_avatar_pixmap(cached)
             reply.deleteLater()
             return
         if orig in self._recent_icon_pending:
@@ -4869,6 +4927,7 @@ class MainWindow(QMainWindow):
                         pass
                     if item.listWidget() is not None:
                         item.setIcon(QIcon(str(cached)))
+                    self._history_modern.list.viewport().update()
             reply.deleteLater()
             return
 

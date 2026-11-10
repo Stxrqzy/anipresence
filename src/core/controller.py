@@ -994,7 +994,15 @@ class Controller:
 
     def remove_recent_entry(self, entry):
         """Delete one history entry and refresh the UI list."""
-        self.recent.remove(entry)
+        from .history import history_key
+        from .media_identity import MediaIdentity
+        local = self.recent.items()
+        resolver = MediaIdentity([*local, *self.watchlog.history(local), entry])
+        key = history_key(entry, resolver)
+        for candidate in local:
+            if history_key(candidate, resolver) == key:
+                self.recent.remove(candidate)
+        self.watchlog.dismiss_history(dict(entry, history_key=list(key)))
         self.bridge.recent.emit(self.recent.items())
 
     def remove_continue_entry(self, title):
@@ -1005,6 +1013,7 @@ class Controller:
     def clear_recent(self):
         """Delete all history entries and refresh the UI list."""
         self.recent.clear()
+        self.watchlog.clear_feed_history()
         self.bridge.recent.emit(self.recent.items())
 
     # ------------------------------------------------------------- anilist

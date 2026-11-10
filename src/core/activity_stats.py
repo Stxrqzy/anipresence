@@ -7,11 +7,12 @@ identities use a conservative per-title/day overlap deduction instead.
 import re
 from collections import defaultdict
 from datetime import date, datetime, timedelta
+from .media_identity import merge_title_rows
 
 
-def feed_episodes(snapshot):
+def feed_episodes(snapshot, newest_first=False):
     seen = set()
-    for item in sorted(snapshot.get("items") or [], key=lambda e: e.get("createdAt") or 0):
+    for item in sorted(snapshot.get("items") or [], key=lambda e: e.get("createdAt") or 0, reverse=newest_first):
         media = item.get("media") or {}
         status = str(item.get("status") or "").lower()
         if media.get("type") != "ANIME" or status not in ("watched episode", "rewatched episode", "re-watched episode"):
@@ -37,36 +38,39 @@ def feed_episodes(snapshot):
                 continue
             seen.add(key)
             yield {"key": key, "day": day.isoformat(), "seconds": seconds,
+                   "last_watched": float(item["createdAt"]), "activity_id": item.get("id"),
                    "title": title.get("romaji") or title.get("english") or title.get("native") or str(media["id"]),
+                   "aliases": [value for value in title.values() if value],
                    "media_id": int(media["id"]), "episode": episode,
                    "genres": media.get("genres") or [], "url": media.get("siteUrl") or "",
                    "cover": (media.get("coverImage") or {}).get("large") or ""}
 
 
-def reconcile(titles, local_days, local_episodes, snapshot):
-    rows = {name: dict(value, title=name, days=dict(value.get("days") or {}),
-                       local_seconds=max(0, value.get("seconds", 0)-(value.get("imported_seconds") or 0)),
-                       estimated_days={}, beyond_days={}) for name, value in titles.items()}
-    by_id = {int(e["media_id"]): name for name, e in rows.items() if e.get("media_id")}
-    by_name = {name.casefold(): name for name in rows}
+def reconcile(titles, local_days, local_episodes, snapshot, references=()):
+    events = list(feed_episodes(snapshot))
+    rows, resolver = merge_title_rows(titles, [*local_episodes.values(), *references, *events])
+    for row in rows.values():
+        row.update(estimated_days={}, beyond_days={})
     measured = set()
     episodes = {}
+    mapped_days = defaultdict(lambda: defaultdict(float))
+    measured_rows = defaultdict(list)
     for entry in local_episodes.values():
-        name = entry["title"]
-        media_id = entry.get("media_id")
-        key = (int(media_id), entry["episode"]) if media_id else (name.casefold(), entry["episode"])
+        identity = resolver.key(entry)
+        key = (identity[1], entry["episode"])
         measured.add(key)
-        measured.add((name.casefold(), entry["episode"]))
-        episodes[key] = max(entry.get("days") or {"": 0})
-    for event in feed_episodes(snapshot):
-        name = by_id.get(event["media_id"]) or by_name.get(event["title"].casefold()) or event["title"]
-        row = rows.setdefault(name, dict(event, title=name, days={}, local_seconds=0,
+        episodes[key] = max(episodes.get(key, ""), max(entry.get("days") or {"": 0}))
+        measured_rows[identity].append(entry)
+        for day, seconds in (entry.get("days") or {}).items():
+            mapped_days[identity][day] += seconds
+    for event in events:
+        identity = resolver.key(event)
+        row = rows.setdefault(identity, dict(event, title=resolver.title(event), days={}, local_seconds=0,
                                         imported_seconds=0, estimated_days={}, beyond_days={}))
         row.setdefault("genres", event["genres"])
         row.setdefault("media_id", event["media_id"])
-        by_id[event["media_id"]] = name
         key = event["key"]
-        if key in measured or (name.casefold(), event["episode"]) in measured:
+        if key in measured:
             continue
         episodes[key] = event["day"]
         estimates = row["estimated_days"]
@@ -75,17 +79,14 @@ def reconcile(titles, local_days, local_episodes, snapshot):
             beyond = row["beyond_days"]
             beyond[event["day"]] = beyond.get(event["day"], 0) + event["seconds"]
     combined_days = dict(local_days)
-    for row in rows.values():
+    for identity, row in rows.items():
         # Legacy measured time is not mapped to episodes. Deduct only that
         # unmapped portion, so known local episodes aren't subtracted twice.
-        mapped = defaultdict(float)
+        mapped = mapped_days[identity]
         beyond_import = 0
-        for entry in local_episodes.values():
-            if entry["title"] == row["title"] or (row.get("media_id") and entry.get("media_id") == row["media_id"]):
-                for day, seconds in (entry.get("days") or {}).items():
-                    mapped[day] += seconds
-                if row.get("imported_progress") is not None and entry["episode"] > row["imported_progress"]:
-                    beyond_import += sum(entry["days"].values())
+        for entry in measured_rows[identity]:
+            if row.get("imported_progress") is not None and entry["episode"] > row["imported_progress"]:
+                beyond_import += sum(entry["days"].values())
         for day, seconds in list(row["estimated_days"].items()):
             legacy = max(0, row["days"].get(day, 0)-mapped[day])
             estimate = max(0, seconds-legacy)
