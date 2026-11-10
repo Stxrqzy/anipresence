@@ -43,6 +43,60 @@ def make_window(tmp_path, monkeypatch):
     app.processEvents()
 
 
+def test_cached_avatar_arrives_during_startup(make_window, monkeypatch, tmp_path):
+    from PySide6.QtGui import QColor, QImage
+    from src.core.artwork import ArtworkService
+    url = "https://avatar.example/alice.png"
+    cache = ArtworkService(tmp_path, lambda: None).image_path(url)
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    image = QImage(80, 80, QImage.Format_ARGB32)
+    image.fill(QColor("#ca37ee")); image.save(str(cache), "PNG")
+    monkeypatch.setattr(Controller, "fetch_account_avatar",
+                        lambda self, name: self.bridge.account_avatar.emit(name, url))
+    app, window = make_window(anilist_accounts=["Alice"], anilist_username="Alice")
+    assert window._account_avatar_url == url
+    assert not window._sidebar_account.icon().isNull()
+    assert window.account_avatar.pixmap().toImage().pixelColor(17, 17).name() == "#ca37ee"
+
+
+def test_library_filters_sorting_account_reset_and_layout_switch(make_window):
+    from PySide6.QtCore import Qt
+    app, window = make_window(anilist_accounts=["Alice", "Bob"], anilist_username="Alice", smooth_animations=False)
+    rows = [{"title": "Zeta", "anilist_id": 1, "episodes": 24, "mean_score": 90, "created_at": 10,
+             "progress": 4, "genres": ["Action"], "season_year": 2024},
+            {"title": "Romaji", "title_english": "Alpha", "aliases": ["Romaji"], "anilist_id": 2,
+             "episodes": 12, "mean_score": 80, "created_at": 20, "genres": ["Drama"], "season_year": 2025}]
+    window._on_library_loaded({"username": "Alice", "sections": {"Watching": rows, "Planning": [rows[0]]}})
+    panel = window._library_modern
+    assert len(panel.entries) == 2
+    assert panel.buttons["All"].text() == "All  2"
+    assert panel.grid.item(0).data(Qt.UserRole)["title"] == "Alpha"
+    panel.sort.setCurrentIndex(2)
+    assert panel.grid.item(0).data(Qt.UserRole)["title"] == "Zeta"
+    panel.search.setText("romaji")
+    assert panel.grid.count() == 1
+    panel.search.clear(); panel.genre.setCurrentText("Action")
+    assert panel.grid.count() == 1
+    panel.reset_filters()
+    window.show(); window.resize(600, 900)
+    window.tabbar.setCurrentIndex(window._library_tab_index)
+    for _ in range(5): app.processEvents()
+    assert panel.grid.visualItemRect(panel.grid.item(1)).x() > 0
+    assert panel.grid.visualItemRect(panel.grid.item(1)).right() < panel.grid.viewport().width()
+    window.modern_ui_check.setChecked(False)
+    assert panel.isHidden()
+    assert window._library_section_lists["Watching"].count() == 2
+    window.modern_ui_check.setChecked(True)
+    assert not panel.isHidden()
+    window.anilist_combo.setCurrentIndex(window.anilist_combo.findData("Bob"))
+    assert not panel.entries
+    window._on_library_loaded({"username": "Alice", "sections": {"Watching": rows}})
+    assert not panel.entries
+    window.cover_source_combo.setCurrentIndex(1)
+    assert window._artwork.cover_source == "anilist"
+    assert ConfigManager(window.cfg.path).data.cover_source == "anilist"
+
+
 def test_startup_update_is_immediate_and_surfaces_available_release(make_window, monkeypatch):
     requests = []
     def release(feed):
@@ -175,9 +229,9 @@ def test_history_renders_episode_names_and_numeric_runs(make_window):
                        {"title": "Example", "episode": 2, "last_watched": 20, "episode_title": "Two"}])
     panel = window._history_modern
     entries = [panel.list.item(i) for i in range(panel.list.count()) if panel.list.item(i).data(Qt.UserRole+1)]
-    assert [e.data(Qt.UserRole+1)["episode"] for e in entries] == [2, 10]
-    assert "Two" in entries[0].data(DETAIL_ROLE)
-    assert "Two" in window.recent_list.item(0).data(DETAIL_ROLE)
+    assert [e.data(Qt.UserRole+1)["episode"] for e in entries] == [10, 2]
+    assert "Ten" in entries[0].data(DETAIL_ROLE)
+    assert "Ten" in window.recent_list.item(0).data(DETAIL_ROLE)
     panel.search.setText("Two")
     assert "1 entries" in panel.count.text()
 

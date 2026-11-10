@@ -159,7 +159,7 @@ class Controller:
         self.watchlog = self._make_watchlog()
         from .artwork import ArtworkService
         self.artwork = ArtworkService(APP_DIR, self.bridge.artwork_ready.emit)
-        self.artwork.configure(cfg.data.tmdb_credential)
+        self.artwork.configure(cfg.data.tmdb_credential, cfg.data.cover_source)
 
         # Localhost bridge the browser extension reports into. The token is
         # generated once per install and persisted so the extension can be
@@ -922,7 +922,7 @@ class Controller:
             {
                 "id": m.id,
                 "title": m.display_title(),
-                "cover": m.cover_large or m.cover_extra_large,
+                "cover": m.cover_extra_large or m.cover_large,
                 "url": m.site_url,
                 "episodes": m.episodes,
                 "is_current": m is current,
@@ -967,7 +967,7 @@ class Controller:
             detection.episode,
             detection.website,
             detection.url,
-            media.cover_large if media else "",
+            (media.cover_extra_large or media.cover_large) if media else "",
         )
         self._maybe_add_recent()
         self._sync_presence()
@@ -986,10 +986,11 @@ class Controller:
             "episode_title": detection.episode_title,
             "season_year": media.season_year if media else None,
             "aliases": [media.title_english, media.title_romaji, media.title_native] if media else [],
+            "title_english": media.title_english if media else "",
             "url": detection.url,
             "anilist_id": media.id if media else None,
             "anilist_url": media.site_url if media else "",
-            "cover": media.cover_large if media else "",
+            "cover": (media.cover_extra_large or media.cover_large) if media else "",
             "episodes_total": media.episodes if media else None,
             "banner_url": getattr(media, "banner_url", "") if media else "",
             "current_time": detection.video.current_time if detection.video else None,
@@ -1356,7 +1357,8 @@ class Controller:
                     "title": media.display_title(),
                     "url": media.site_url,
                     "aliases": [media.title_english, media.title_romaji, media.title_native],
-                    "cover": media.cover_large or media.cover_extra_large,
+                    "title_english": media.title_english,
+                    "cover": media.cover_extra_large or media.cover_large,
                     "anilist_id": media.id,
                     "episodes": media.episodes,
                     "mean_score": media.mean_score,
@@ -1392,9 +1394,12 @@ class Controller:
             entry = {
                 "title": media.display_title(),
                 "aliases": [media.title_english, media.title_romaji, media.title_native],
+                "title_english": media.title_english,
+                "created_at": item.get("created_at") or 0,
+                "updated_at": item.get("updated_at") or 0,
                 "season_year": media.season_year,
                 "url": media.site_url,
-                "cover": media.cover_large or media.cover_extra_large,
+                "cover": media.cover_extra_large or media.cover_large,
                 "anilist_id": media.id,
                 "status": status,
                 "progress": progress,
@@ -1429,9 +1434,12 @@ class Controller:
         section_entry = {
             "title": media.display_title(),
             "aliases": [media.title_english, media.title_romaji, media.title_native],
+            "title_english": media.title_english,
+            "created_at": item.get("created_at") or 0,
+            "updated_at": item.get("updated_at") or 0,
             "season_year": media.season_year,
             "url": media.site_url,
-            "cover": media.cover_large,
+            "cover": media.cover_extra_large or media.cover_large,
             "status": status,
             "progress": progress,
             "episodes": media.episodes,
@@ -1452,10 +1460,11 @@ class Controller:
                     "title": media.display_title(),
                     "episode": progress,
                     "aliases": [media.title_english, media.title_romaji, media.title_native],
+                    "title_english": media.title_english,
                     "season_year": media.season_year,
                     "website": "AniList",
                     "url": media.site_url,
-                    "cover": media.cover_large,
+                    "cover": media.cover_extra_large or media.cover_large,
                     "seconds": progress * (media.duration or 24) * 60,
                     "media_id": media.id,
                 }
@@ -1473,6 +1482,7 @@ class Controller:
             "anilist_id": media.id if media else None,
             "episode_title": detection.episode_title,
             "aliases": [media.title_english, media.title_romaji, media.title_native] if media else [],
+            "title_english": media.title_english if media else "",
             "banner_url": getattr(media, "banner_url", "") if media else "",
             "episode": detection.episode,
             "episodes_total": media.episodes if media else None,
@@ -1497,9 +1507,11 @@ class Controller:
         if not media:
             return None
         entry = {"title": media.display_title(), "media_id": media.id,
-                 "aliases": [media.title_english, media.title_romaji, media.title_native],
-                 "season_year": media.season_year, "cover": media.cover_extra_large or media.cover_large}
-        return self.artwork.enrich(entry).get("cover") or None
+                 "title_english": media.title_english,
+                  "aliases": [media.title_english, media.title_romaji, media.title_native],
+                  "season_year": media.season_year, "episodes": media.episodes,
+                  "cover": media.cover_extra_large or media.cover_large}
+        return self.artwork.enrich(entry, priority=0).get("cover") or None
 
     # -------------------------------------------------------------- discord
     def _connect_discord(self):

@@ -4,6 +4,7 @@ import json
 import queue
 import threading
 import time
+import itertools
 from pathlib import Path
 from urllib.parse import urlsplit
 from PySide6.QtGui import QImage
@@ -16,22 +17,28 @@ class ArtworkService:
         self.directory = Path(directory)
         self.ready = ready
         self.credential = ""
+        self.cover_source = "tmdb"
         self.generation = 0
         self.cache = {}
-        self.pending = set()
+        self.api_cache = {}
+        self.pending = {}
+        self.sequence = itertools.count()
         self.lock = threading.RLock()
-        self.jobs = queue.Queue(maxsize=2000)
+        self.jobs = queue.PriorityQueue(maxsize=2500)
         self.closed = False
         try:
-            self.cache = json.loads((self.directory / "tmdb.json").read_text(encoding="utf-8"))
-            if not isinstance(self.cache, dict):
-                self.cache = {}
+            saved = json.loads((self.directory / "tmdb.json").read_text(encoding="utf-8"))
+            if isinstance(saved, dict) and saved.get("version") == 2:
+                self.cache = saved.get("entries") or {}
+                self.api_cache = saved.get("responses") or {}
         except (OSError, ValueError):
             pass
         self.worker = None
 
-    def configure(self, credential):
+    def configure(self, credential, cover_source=None):
         with self.lock:
+            if cover_source in ("tmdb", "anilist"):
+                self.cover_source = cover_source
             if credential.strip() != self.credential:
                 self.credential = credential.strip()
                 self.generation += 1
@@ -54,8 +61,14 @@ class ArtworkService:
             return item.get("value", {})
         return None
 
-    def enrich(self, entry, episode=False):
+    def enrich(self, entry, episode=False, priority=20):
         result = dict(entry)
+        if self.cover_source == "anilist" and entry.get("anilist_cover"):
+            result["cover"] = entry["anilist_cover"]
+            if "cover_url" in result:
+                result["cover_url"] = result["cover_extra_url"] = entry["anilist_cover"]
+        if entry.get("title_english"):
+            result["title"] = entry["title_english"]
         if not self.credential or not entry.get("title") or self.closed:
             return result
         show_key = self.key(entry)
@@ -66,7 +79,7 @@ class ArtworkService:
             detail = self._cached(key)
             for data in (show or {}, detail or {}):
                 poster = data.get("poster")
-                if poster and self.image_path(poster).exists():
+                if self.cover_source == "tmdb" and poster and self.image_path(poster).exists():
                     result["anilist_cover"] = entry.get("anilist_cover") or entry.get("cover") or entry.get("cover_url") or ""
                     result["cover"] = poster
                     if "cover_url" in result:
@@ -77,10 +90,12 @@ class ArtworkService:
                         result[field] = data[field]
                 if not result.get("episode_title") and data.get("episode_title"):
                     result["episode_title"] = data["episode_title"]
-            if detail is None and key not in self.pending:
+                if data.get("title_english") and not entry.get("title_english"):
+                    result["title"] = data["title_english"]
+            if (detail is None or show is None) and priority < self.pending.get(key, 9999):
                 try:
-                    self.jobs.put_nowait((self.generation, self.credential, key, dict(entry), ep))
-                    self.pending.add(key)
+                    self.jobs.put_nowait((priority, next(self.sequence), self.generation, self.credential, key, dict(entry), ep))
+                    self.pending[key] = priority
                     if self.worker is None:
                         self.worker = threading.Thread(target=self._run, daemon=True, name="tmdb-artwork")
                         self.worker.start()
@@ -94,7 +109,7 @@ class ArtworkService:
             if not url:
                 continue
             path = self.image_path(url)
-            if path.exists():
+            if path.exists() and not QImage(str(path)).isNull():
                 continue
             try:
                 response = client.session.get(url, timeout=10)
@@ -109,12 +124,13 @@ class ArtworkService:
     def _run(self):
         while not self.closed:
             job = self.jobs.get()
-            if job is None:
+            if len(job) == 3:
                 return
-            generation, credential, key, entry, ep = job
-            if generation != self.generation:
+            priority, _, generation, credential, key, entry, ep = job
+            if generation != self.generation or self.pending.get(key) != priority:
                 continue
             client = TMDBClient(credential)
+            client.response_cache = self.api_cache
             show = None
             try:
                 show_key = self.key(entry)
@@ -136,7 +152,7 @@ class ArtworkService:
                 client.session.close()
                 with self.lock:
                     if generation == self.generation:
-                        self.pending.discard(key)
+                        self.pending.pop(key, None)
                 if not self.closed and generation == self.generation:
                     self.ready()
 
@@ -147,13 +163,13 @@ class ArtworkService:
             self.cache[key] = {"at": time.time(), "value": value}
             try:
                 self.directory.mkdir(parents=True, exist_ok=True)
-                (self.directory / "tmdb.json").write_text(json.dumps(self.cache), encoding="utf-8")
+                (self.directory / "tmdb.json").write_text(json.dumps({"version": 2, "entries": self.cache, "responses": self.api_cache}), encoding="utf-8")
             except OSError:
                 pass
 
     def close(self):
         self.closed = True
         try:
-            self.jobs.put_nowait(None)
+            self.jobs.put_nowait((-1, next(self.sequence), None))
         except queue.Full:
             pass

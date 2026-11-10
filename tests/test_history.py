@@ -19,7 +19,7 @@ def test_history_merges_aliases_and_keeps_local_timing_and_playable_url():
              {"title": "ｎａｒｕｔｏ", "episode": "2", "last_watched": 5, "watch_seconds": 30}]
     result = combined_history(local, feed)
     assert len(result) == 3
-    assert {e["title"] for e in result} == {"NARUTO"}
+    assert {e["title"] for e in result} == {"Ninja story"}
     measured = next(e for e in result if e["history_source"] == "Local")
     assert measured["url"] == "https://player/2"
     assert measured["current_time"] == 120
@@ -52,8 +52,8 @@ def test_history_sorts_numeric_runs_without_crossing_other_anime_or_days():
                {"title": "B", "episode": 1, "last_watched": stamp+10},
                {"title": "A", "episode": 1, "last_watched": stamp+5},
                {"title": "A", "episode": 9, "last_watched": stamp-1}]
-    assert [e["episode"] for e in sorted_history(entries)] == [2, 10, 1, 1, 9]
-    assert [e["episode"] for e in sorted_history(entries, newest_first=False)] == [9, 1, 1, 2, 10]
+    assert [e["episode"] for e in sorted_history(entries)] == [10, 2, 1, 1, 9]
+    assert [e["episode"] for e in sorted_history(entries, newest_first=False)] == [9, 1, 1, 10, 2]
 
 
 def test_history_uses_latest_feed_date_and_resolves_old_title_dismissals():

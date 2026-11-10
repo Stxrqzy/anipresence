@@ -16,8 +16,8 @@ def sorted_history(entries, newest_first=True):
         try:
             return float(entry.get("episode"))
         except (ValueError, TypeError):
-            return float("inf")
-    return [entry for _, run in groupby(ordered, run_key) for entry in sorted(run, key=number)]
+            return float("-inf")
+    return [entry for _, run in groupby(ordered, run_key) for entry in sorted(run, key=number, reverse=True)]
 
 
 def history_key(entry, resolver):
@@ -33,6 +33,12 @@ def history_key(entry, resolver):
 def combined_history(local, snapshot, references=(), cleared_before=0, dismissed=()):
     feed = list(feed_episodes(snapshot, newest_first=True))
     resolver = MediaIdentity([*local, *references, *feed])
+    metadata = {}
+    for entry in [*feed, *references]:
+        target = metadata.setdefault(resolver.key(entry), {})
+        for field in ("title_english", "aliases", "season_year", "cover"):
+            if entry.get(field):
+                target[field] = entry[field]
     entries = {}
     hidden = {(*resolver.key({"title": key[1]}), key[2]) if key[0] == "title" else tuple(key)
               for key in dismissed}
@@ -62,9 +68,13 @@ def combined_history(local, snapshot, references=(), cleared_before=0, dismissed
         if event["last_watched"] <= cleared_before or key in hidden:
             continue
         entries[key] = {"title": resolver.title(event), "episode": event["episode"],
+                        "title_english": event.get("title_english") or "",
                         "aliases": event.get("aliases") or [], "season_year": event.get("season_year"),
                         "anilist_id": event["media_id"], "website": "AniList",
                         "url": event["url"] or f"https://anilist.co/anime/{event['media_id']}",
                         "cover": event["cover"], "last_watched": event["last_watched"],
                         "history_source": "AniList feed", "history_key": list(key)}
+    for entry in entries.values():
+        entry.update(metadata.get(resolver.key(entry), {}))
+        entry["title"] = resolver.title(entry)
     return sorted_history(entries.values())

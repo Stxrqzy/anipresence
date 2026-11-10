@@ -912,7 +912,7 @@ class MainWindow(QMainWindow):
         self._nam.finished.connect(self._on_cover_reply)
         self._cover_cache_dir = APP_DIR / "covers"
         self._artwork = self.controller.artwork
-        self._artwork.configure(self.cfg.data.tmdb_credential)
+        self._artwork.configure(self.cfg.data.tmdb_credential, self.cfg.data.cover_source)
         self._artwork_timer = QTimer(self)
         self._artwork_timer.setSingleShot(True)
         self._artwork_timer.setInterval(600)
@@ -925,6 +925,8 @@ class MainWindow(QMainWindow):
         self._section_icon_fetching = set()
         self._library_icon_pending = {}  # cover-url -> QListWidgetItem (Library tab)
         self._library_icon_fetching = set()
+        self._poster_fetching = set()
+        self._poster_failed = set()
         self._notified_airing = set()  # (anilist_id, episode) pairs already announced
         self._tunnel_proc = None      # cloudflared subprocess for the share tunnel
         self._match_icon_pending = {}  # cover-url -> QToolButton (match chooser)
@@ -958,6 +960,7 @@ class MainWindow(QMainWindow):
         self._system_refresh.timeout.connect(self._maybe_resync_system_theme)
         self._build_ui()
         self._connect_signals()
+        self._populate_anilist_accounts()
         self._load_toggles_from_config()
         self._build_tray()
         self.show_placeholder()
@@ -1513,7 +1516,8 @@ class MainWindow(QMainWindow):
         self._now_top_row = top_row
         top_row.setSpacing(18)
 
-        self.cover_label = QLabel()
+        from .poster import RoundedPoster
+        self.cover_label = RoundedPoster()
         self.cover_label.setObjectName("cover")
         self.cover_label.setFixedSize(150, 210)
         self.cover_label.setAlignment(Qt.AlignCenter)
@@ -1782,8 +1786,6 @@ class MainWindow(QMainWindow):
         account_hint.setObjectName("subLabel")
         account_hint.setWordWrap(True)
         account_layout.addWidget(account_hint)
-        self._populate_anilist_accounts()
-
         c_layout.addWidget(self._sep())
 
         self._pwa_card = QFrame()
@@ -1965,6 +1967,9 @@ class MainWindow(QMainWindow):
         self._log_classic.setVisible(not modern)
         self._analytics.setVisible(modern)
         self._stats_classic.setVisible(not modern)
+        self._show_library_calendar(False)
+        if getattr(self, "_last_library_payload", None):
+            self._on_library_loaded(self._last_library_payload)
         for btn in (self.win_min_btn,self.win_max_btn,self.win_close_btn):
             btn.setProperty("modern",modern)
             btn.setFixedSize(30,26) if modern else btn.setFixedSize(14,14)
@@ -2106,7 +2111,13 @@ class MainWindow(QMainWindow):
         if credential == self.cfg.data.tmdb_credential:
             return
         self.cfg.set(tmdb_credential=credential)
-        self._artwork.configure(credential)
+        self._artwork.configure(credential, self.cfg.data.cover_source)
+        self._refresh_artwork_views()
+
+    def _on_cover_source_changed(self, index):
+        source = self.cover_source_combo.itemData(index)
+        self.cfg.set(cover_source=source)
+        self._artwork.configure(self.cfg.data.tmdb_credential, source)
         self._refresh_artwork_views()
 
     def _on_artwork_ready(self):
@@ -2159,7 +2170,7 @@ class MainWindow(QMainWindow):
                 entry = dict(entry, **{k: v for k, v in measured.items() if v is not None})
             entries.append(entry)
         entries.sort(key=lambda e: e.get("last_watched") or 0, reverse=True)
-        entries = [self._artwork.enrich(e, episode=True) for e in entries[:4]]
+        entries = [self._artwork.enrich(e, episode=True, priority=2) for e in entries[:4]]
         frame.set_entries(entries)
         # Reuse the normal history cover downloader for AniList fallback images.
         for entry in entries:
@@ -2255,6 +2266,29 @@ class MainWindow(QMainWindow):
             sl.addWidget(listw, 1)
             self._library_stack.addWidget(section_page)
         layout.addWidget(self._library_stack, 1)
+        from .library import LibraryPanel
+        self._library_modern = LibraryPanel()
+        self._library_modern.activated.connect(lambda entry: webbrowser.open(entry["url"]) if entry.get("url") else None)
+        self._library_modern.refresh_requested.connect(self._on_refresh_library)
+        self._library_modern.calendar_requested.connect(lambda: self._show_library_calendar(True))
+        layout.addWidget(self._library_modern, 1)
+        self._library_back = QPushButton("Back to library")
+        self._library_back.clicked.connect(lambda: self._show_library_calendar(False))
+        layout.addWidget(self._library_back)
+
+    def _show_library_calendar(self, calendar):
+        modern = self.cfg.data.ui_layout == "modern"
+        self._library_modern.setVisible(modern and not calendar)
+        self._library_modern.configure(self._applied_theme == "light")
+        self._library_stack.setVisible(not modern or calendar)
+        self._library_tabs.setVisible(not modern)
+        self.library_search.setVisible(not modern or calendar)
+        self._library_back.setVisible(modern and calendar)
+        self._library_page.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff if modern else Qt.ScrollBarAsNeeded)
+        if modern and calendar:
+            self._library_stack.setCurrentIndex(0)
+            if getattr(self, "_last_calendar_payload", None):
+                self._on_calendar_loaded(self._last_calendar_payload)
 
     def _build_stats_page(self, margin, compact):
         """Assemble the "Stats" tab: summary cards, a daily chart and per-title
@@ -2583,7 +2617,14 @@ class MainWindow(QMainWindow):
         self.tmdb_edit.setPlaceholderText("TMDB API key or API Read Access Token")
         self.tmdb_edit.editingFinished.connect(self._on_tmdb_changed)
         art_layout.addWidget(self.tmdb_edit)
-        hint = QLabel('TMDB posters and episode stills are preferred; AniList is the fallback. '
+        self.cover_source_combo = QComboBox()
+        self.cover_source_combo.addItem("TMDB covers · AniList fallback", "tmdb")
+        self.cover_source_combo.addItem("AniList covers", "anilist")
+        self.cover_source_combo.setCurrentIndex(max(0, self.cover_source_combo.findData(self.cfg.data.cover_source)))
+        self.cover_source_combo.currentIndexChanged.connect(self._on_cover_source_changed)
+        art_layout.addWidget(self._field_label("COVER SOURCE"))
+        art_layout.addWidget(self.cover_source_combo)
+        hint = QLabel('Episode names and stills use TMDB with either cover source. '
                       '<a href="https://www.themoviedb.org/settings/api">Get a TMDB key</a>.')
         hint.setWordWrap(True); hint.setOpenExternalLinks(True); hint.setObjectName("subLabel")
         art_layout.addWidget(hint)
@@ -3173,6 +3214,7 @@ class MainWindow(QMainWindow):
 
     def _on_refresh_library(self):
         """Kick off a live fetch of the active account's AniList list + calendar."""
+        self._poster_failed.clear()
         self.library_refresh_btn.setEnabled(False)
         self.library_refresh_btn.setText("Loading…")
         self.controller.refresh_library()
@@ -3180,6 +3222,8 @@ class MainWindow(QMainWindow):
 
     def _on_library_loaded(self, payload):
         """Fill the Library sections from a background fetch."""
+        if (payload.get("username") or "") != self.controller.active_anilist_account:
+            return
         self._last_library_payload = payload
         self.library_refresh_btn.setEnabled(True)
         self.library_refresh_btn.setText("Refresh")
@@ -3191,6 +3235,10 @@ class MainWindow(QMainWindow):
             self.library_account_label.setText(f"{username} · AniList")
         else:
             self.library_account_label.setText("")
+        self._library_modern.set_sections(sections, message)
+        if self.cfg.data.ui_layout == "modern":
+            self._maybe_notify_airing(sections)
+            return
         for key, listw in self._library_section_lists.items():
             listw.clear()
             entries = sections.get(key) or []
@@ -3293,7 +3341,11 @@ class MainWindow(QMainWindow):
 
     def _on_calendar_loaded(self, payload):
         """Fill the Calendar sub-tab from a background seasonal fetch."""
+        if (payload.get("username") or "") != self.controller.active_anilist_account:
+            return
         self._last_calendar_payload = payload
+        if self.cfg.data.ui_layout == "modern" and self._library_stack.isHidden():
+            return
         import datetime
 
         listw = self._calendar_list
@@ -3730,6 +3782,7 @@ class MainWindow(QMainWindow):
         self._page_heading.update()
         self._brand.configure(self.cfg.data.accent, self._applied_theme)
         self._continue_frame.configure(self.cfg.data.accent)
+        self._library_modern.configure(self._applied_theme == "light")
         self._sync_navigation(self.tabbar.currentIndex())
         if getattr(self, "_chart_view", None) is not None and hasattr(self, "_chart_days"):
             self._update_stats_chart(self._chart_days)
@@ -3885,6 +3938,7 @@ class MainWindow(QMainWindow):
                 pass
         self._build_ui()
         self._connect_signals()
+        self._populate_anilist_accounts()
         self._load_toggles_from_config()
         self.log_view.setPlainText(log_text)
         self.anilist_login_status.setText(login_status)
@@ -4020,6 +4074,11 @@ class MainWindow(QMainWindow):
         name = self.anilist_combo.itemData(index) or ""
         if name != self.controller.active_anilist_account:
             self.controller.switch_anilist_account(name)
+            self._last_library_payload = None
+            self._last_calendar_payload = None
+            self._library_modern.reset_filters()
+            self._on_library_loaded({"username": name, "message": "Loading library…"})
+            self._calendar_list.clear()
             self._refresh_stats()
         self._populate_anilist_accounts()
         self._analytics.sync_button.setEnabled(True)
@@ -4117,7 +4176,7 @@ class MainWindow(QMainWindow):
             self.show_placeholder()
             return
         self._raw_detection_payload = payload
-        payload = self._artwork.enrich(payload, episode=True)
+        payload = self._artwork.enrich(payload, episode=True, priority=0)
         previous = self._current_payload or {}
         self._current_payload = payload
         self._load_banner(payload.get("banner_url") or "")
@@ -4201,11 +4260,7 @@ class MainWindow(QMainWindow):
             self._cover_url = cover
             self._request_cover(cover)
         elif self._cover_pixmap and cover:
-            self.cover_label.setPixmap(
-                self._cover_pixmap.scaled(
-                    self.cover_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
-                )
-            )
+            self.cover_label.setPixmap(self._cover_pixmap)
 
         self._maybe_auto_accent()
         self._refresh_continue()
@@ -4537,7 +4592,8 @@ class MainWindow(QMainWindow):
 
     def _on_recent(self, entries):
         self._last_recent = entries
-        entries = [self._artwork.enrich(e, episode=True) for e in self.controller.watchlog.history(entries)]
+        entries = [self._artwork.enrich(e, episode=True, priority=10 if i < 40 else 50)
+                   for i, e in enumerate(self.controller.watchlog.history(entries))]
         self._history_modern.set_entries(entries)
         view = self.recent_list.view_state()
         self._recent_icon_pending.clear()
@@ -4794,9 +4850,7 @@ class MainWindow(QMainWindow):
             if not pixmap.isNull():
                 self._cover_pixmap = pixmap
                 self._ambient_src_version += 1
-                self.cover_label.setPixmap(
-                    pixmap.scaled(self.cover_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                )
+                self.cover_label.setPixmap(pixmap)
                 self._cover_spinner.hide()
                 self._maybe_auto_accent()
                 self._update_ambient()
@@ -4806,8 +4860,32 @@ class MainWindow(QMainWindow):
         request = QNetworkRequest(QUrl(url))
         self._nam.get(request)
 
+    def _request_library_poster(self, url):
+        if url in self._poster_fetching or url in self._poster_failed or len(self._poster_fetching) >= 6:
+            return
+        self._poster_fetching.add(url)
+        request = QNetworkRequest(QUrl(url))
+        request.setAttribute(QNetworkRequest.User, "library-poster")
+        request.setTransferTimeout(15000)
+        self._nam.get(request)
+
     def _on_cover_reply(self, reply):
         orig = reply.request().url().toString()
+        if reply.request().attribute(QNetworkRequest.User) == "library-poster":
+            self._poster_fetching.discard(orig)
+            pixmap = QPixmap()
+            data = bytes(reply.readAll()) if reply.error() == QNetworkReply.NoError else b""
+            if data and pixmap.loadFromData(data):
+                try:
+                    self._cover_cache_dir.mkdir(parents=True, exist_ok=True)
+                    self._cover_cache_path(orig).write_bytes(data)
+                except OSError:
+                    self._poster_failed.add(orig)
+            else:
+                self._poster_failed.add(orig)
+            self._library_modern.grid.viewport().update()
+            reply.deleteLater()
+            return
         if orig in self._banner_requests:
             self._banner_requests.discard(orig)
             if reply.error() == QNetworkReply.NoError:
@@ -4925,6 +5003,9 @@ class MainWindow(QMainWindow):
             reply.deleteLater()
             return
 
+        if orig != self._cover_url:
+            reply.deleteLater()
+            return
         self._cover_requested = False
         self._cover_spinner.hide()
         if reply.error() != QNetworkReply.NoError:
@@ -4941,9 +5022,7 @@ class MainWindow(QMainWindow):
         self._cover_pixmap = pixmap
         self._ambient_src_version += 1
         size = self.cover_label.size()
-        self.cover_label.setPixmap(
-            pixmap.scaled(size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        )
+        self.cover_label.setPixmap(pixmap)
         self._maybe_auto_accent()
         self._update_ambient()
         try:
@@ -4990,11 +5069,7 @@ class MainWindow(QMainWindow):
         self.cover_label.setFixedSize(width, height)
         self._place_cover_spinner()
         if self._cover_pixmap:
-            self.cover_label.setPixmap(
-                self._cover_pixmap.scaled(
-                    width, height, Qt.KeepAspectRatio, Qt.SmoothTransformation
-                )
-            )
+            self.cover_label.setPixmap(self._cover_pixmap)
 
     def resizeEvent(self, event):  # noqa: N802 (Qt naming)
         self._tab_anim_stop()

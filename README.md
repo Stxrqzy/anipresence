@@ -15,6 +15,21 @@ from the page title.
 
 ### Version 3.0 interface
 
+Version 3.0.5 rebuilds **Library** as a responsive poster grid with status/count
+pills, watched progress, status badges, search, genre/year/score/status filters,
+and five sort orders: Recently added, Title A–Z, Highest score, Newest year and
+Most episodes. Calendar is available from **More → Calendar**; Classic keeps its
+list layout. Visible posters load first, with bounded image downloads.
+
+**Settings → TMDB Artwork & Episode Names → Cover source** selects TMDB posters
+(with AniList fallback) or AniList posters. Episode names and stills still use
+TMDB with either choice. Original-resolution TMDB images and AniList extra-large
+covers improve artwork quality, and the main cover fills its rounded frame.
+English titles take priority when available. Startup now loads cached account
+avatars immediately. Consecutive History episodes sort **descending** within
+each day (10 above 9). TMDB lookups now handle both absolute and season-local
+episode numbering, alternative titles, and same-name TV/movie matches.
+
 Version 3.0.4 redesigns **Continue Watching** with responsive artwork cards,
 episode names, measured progress, remaining time and keyboard-accessible resume
 buttons. **Settings → TMDB Artwork & Episode Names** accepts your TMDB API key

@@ -74,6 +74,8 @@ query ($name: String) {
       entries {
         status
         progress
+        createdAt
+        updatedAt
         media {
           id
           title { romaji english native }
@@ -104,6 +106,8 @@ query ($userId: Int) {
       entries {
         status
         progress
+        createdAt
+        updatedAt
         media {
           id
           title { romaji english native }
@@ -145,7 +149,7 @@ query ($userId: Int, $page: Int, $since: Int) {
         id status progress createdAt
         media {
           id type title { romaji english native }
-          duration episodes seasonYear genres siteUrl coverImage { large }
+          duration episodes seasonYear genres siteUrl coverImage { extraLarge large }
         }
       }
     }
@@ -254,7 +258,7 @@ class Media:
         )
 
     def display_title(self):
-        return self.title_romaji or self.title_english or self.title_native
+        return self.title_english or self.title_romaji or self.title_native
 
     # Genres are a small controlled vocabulary on AniList, so scanning them
     # broadly is safe: in practice only "Ecchi" (or a full hentai title) ever
@@ -360,6 +364,8 @@ class AniListClient:
                         "media": Media.from_dict(raw) if raw else None,
                         "status": entry.get("status"),
                         "progress": entry.get("progress") or 0,
+                        "created_at": entry.get("createdAt") or 0,
+                        "updated_at": entry.get("updatedAt") or 0,
                     }
                 )
         return results

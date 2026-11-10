@@ -26,6 +26,7 @@ class MediaIdentity:
     def __init__(self, entries):
         self.names = defaultdict(set)
         self.display = {}
+        self.english = {}
         self.title_names = {}
         for entry in entries:
             name = normalized_title(entry.get("title"))
@@ -33,11 +34,13 @@ class MediaIdentity:
                 self.title_names.setdefault(name, " ".join(str(entry["title"]).split()))
             identity = media_id(entry)
             if identity:
-                for title in [entry.get("title"), *(entry.get("aliases") or [])]:
+                for title in [entry.get("title"), entry.get("title_english"), *(entry.get("aliases") or [])]:
                     if normalized_title(title):
                         self.names[normalized_title(title)].add(identity)
                 if entry.get("title"):
                     self.display[identity] = " ".join(entry["title"].split())
+                if entry.get("title_english"):
+                    self.english[identity] = entry["title_english"]
 
     def key(self, entry):
         identity = media_id(entry)
@@ -50,7 +53,9 @@ class MediaIdentity:
     def title(self, entry):
         key = self.key(entry)
         fallback = self.title_names.get(normalized_title(entry.get("title")), "Unknown")
-        return self.display.get(key[1], fallback) if key[0] == "anilist" else fallback
+        if key[0] == "anilist":
+            return self.english.get(key[1]) or self.display.get(key[1], fallback)
+        return entry.get("title_english") or fallback
 
 
 def merge_title_rows(titles, references=()):
@@ -72,7 +77,7 @@ def merge_title_rows(titles, references=()):
         if key[0] == "anilist":
             row["media_id"] = key[1]
         newer = (entry.get("last_watched") or 0) >= row["last_watched"]
-        for field in ("episode", "website", "url", "cover", "genres", "aliases", "season_year"):
+        for field in ("episode", "website", "url", "cover", "genres", "aliases", "season_year", "title_english"):
             if entry.get(field) and (newer or not row.get(field)):
                 row[field] = entry[field]
         row["last_watched"] = max(row["last_watched"], entry.get("last_watched") or 0)

@@ -211,7 +211,7 @@ class WatchLog:
                     entry["url"] = item["url"]
                 if item.get("cover"):
                     entry["cover"] = item["cover"]
-                for field in ("aliases", "season_year"):
+                for field in ("aliases", "season_year", "title_english"):
                     if item.get(field):
                         entry[field] = item[field]
                 entry.setdefault("last_watched", time.time())

@@ -32,6 +32,7 @@ class Config:
     chrome_path: str = ""
     anilist_cache_ttl_days: int = 7
     tmdb_credential: str = ""
+    cover_source: str = "tmdb"       # TMDB posters with AniList fallback, or AniList posters
     show_paused_presence: bool = True
     presence_episode_names: bool = True
     presence_airing_dates: bool = True
@@ -102,6 +103,8 @@ class ConfigManager:
             return
         if self.data.ui_layout not in ("modern", "classic"):
             self.data.ui_layout = "modern"
+        if self.data.cover_source not in ("tmdb", "anilist"):
+            self.data.cover_source = "tmdb"
         # Pre-wizard configs (no onboarding key) are treated as already done so
         # upgrading users never see the first-run wizard.
         if "onboarding_complete" not in raw:

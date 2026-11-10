@@ -73,13 +73,14 @@ class AnimeDelegate(QStyledItemDelegate):
         painter.setPen(QPen(QColor(150,125,210,50),1)); painter.setBrush(QColor(130,110,190,10))
         painter.drawRoundedRect(area,10,10)
         rect=option.rect.adjusted(12,12,-14,-12)
-        cover=QRect(rect.x(),rect.y(),112 if rect.width()>760 else 46,64)
-        pm=icon.pixmap(256,256) if not icon.isNull() else QPixmap(entry.get("cached_cover") or "")
+        pm=icon.pixmap(512,512) if not icon.isNull() else QPixmap(entry.get("cached_cover") or "")
+        landscape = not pm.isNull() and pm.width() > pm.height()
+        cover=QRect(rect.x(),rect.y(),112 if landscape and rect.width()>760 else 46,64)
         clip=QPainterPath(); clip.addRoundedRect(QRectF(cover),7,7)
         painter.save(); painter.setClipPath(clip)
         if not pm.isNull():
-            pm=pm.scaled(cover.size(),Qt.KeepAspectRatioByExpanding,Qt.SmoothTransformation)
-            painter.drawPixmap(cover.x()+(cover.width()-pm.width())//2,cover.y()+(cover.height()-pm.height())//2,pm)
+            from .poster import draw_filled_pixmap
+            draw_filled_pixmap(painter,QRectF(cover),pm,7)
         else:painter.fillRect(cover,QColor(130,110,190,35))
         painter.restore()
         left=cover.right()+18; width=max(1,rect.right()-left)
