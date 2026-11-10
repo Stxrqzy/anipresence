@@ -145,7 +145,7 @@ query ($userId: Int, $page: Int, $since: Int) {
         id status progress createdAt
         media {
           id type title { romaji english native }
-          duration episodes genres siteUrl coverImage { large }
+          duration episodes seasonYear genres siteUrl coverImage { large }
         }
       }
     }

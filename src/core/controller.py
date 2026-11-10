@@ -157,6 +157,9 @@ class Controller:
             self._accounts.append(self._active_account)
             cfg.set(anilist_accounts=self._accounts)
         self.watchlog = self._make_watchlog()
+        from .artwork import ArtworkService
+        self.artwork = ArtworkService(APP_DIR, self.bridge.artwork_ready.emit)
+        self.artwork.configure(cfg.data.tmdb_credential)
 
         # Localhost bridge the browser extension reports into. The token is
         # generated once per install and persisted so the extension can be
@@ -980,6 +983,9 @@ class Controller:
                      or detection.cleaned_title or detection.raw_title,
             "episode": detection.episode,
             "website": detection.website,
+            "episode_title": detection.episode_title,
+            "season_year": media.season_year if media else None,
+            "aliases": [media.title_english, media.title_romaji, media.title_native] if media else [],
             "url": detection.url,
             "anilist_id": media.id if media else None,
             "anilist_url": media.site_url if media else "",
@@ -1349,6 +1355,7 @@ class Controller:
                 {
                     "title": media.display_title(),
                     "url": media.site_url,
+                    "aliases": [media.title_english, media.title_romaji, media.title_native],
                     "cover": media.cover_large or media.cover_extra_large,
                     "anilist_id": media.id,
                     "episodes": media.episodes,
@@ -1384,6 +1391,8 @@ class Controller:
             progress = max(int(item.get("progress") or 0), 0)
             entry = {
                 "title": media.display_title(),
+                "aliases": [media.title_english, media.title_romaji, media.title_native],
+                "season_year": media.season_year,
                 "url": media.site_url,
                 "cover": media.cover_large or media.cover_extra_large,
                 "anilist_id": media.id,
@@ -1419,6 +1428,8 @@ class Controller:
         progress = max(int(item.get("progress") or 0), 0)
         section_entry = {
             "title": media.display_title(),
+            "aliases": [media.title_english, media.title_romaji, media.title_native],
+            "season_year": media.season_year,
             "url": media.site_url,
             "cover": media.cover_large,
             "status": status,
@@ -1440,6 +1451,8 @@ class Controller:
                 {
                     "title": media.display_title(),
                     "episode": progress,
+                    "aliases": [media.title_english, media.title_romaji, media.title_native],
+                    "season_year": media.season_year,
                     "website": "AniList",
                     "url": media.site_url,
                     "cover": media.cover_large,
@@ -1457,6 +1470,9 @@ class Controller:
         return {
             "title": title,
             "detected_title": detection.cleaned_title or detection.raw_title,
+            "anilist_id": media.id if media else None,
+            "episode_title": detection.episode_title,
+            "aliases": [media.title_english, media.title_romaji, media.title_native] if media else [],
             "banner_url": getattr(media, "banner_url", "") if media else "",
             "episode": detection.episode,
             "episodes_total": media.episodes if media else None,
@@ -1476,6 +1492,14 @@ class Controller:
             "match_confidence": self._current.confidence,
             "session_start": self._current.session_start,
         }
+
+    def _preferred_cover(self, media):
+        if not media:
+            return None
+        entry = {"title": media.display_title(), "media_id": media.id,
+                 "aliases": [media.title_english, media.title_romaji, media.title_native],
+                 "season_year": media.season_year, "cover": media.cover_extra_large or media.cover_large}
+        return self.artwork.enrich(entry).get("cover") or None
 
     # -------------------------------------------------------------- discord
     def _connect_discord(self):
@@ -1544,7 +1568,7 @@ class Controller:
         # Prefer the biggest cover AniList offers; the URL must carry a file
         # extension and be publicly reachable for Discord to proxy it. Never
         # send an empty value (Discord's Joi rejects "" on asset keys).
-        cover = (media.cover_extra_large or media.cover_large) if media else None
+        cover = self._preferred_cover(media)
         if not self.cfg.data.presence_cover_art:
             cover = None
         if not cover:
@@ -1613,7 +1637,7 @@ class Controller:
             or detection.cleaned_title
             or detection.raw_title
         )
-        cover = (media.cover_extra_large or media.cover_large) if media else None
+        cover = self._preferred_cover(media)
         hidden = (
             bool(self.cfg.data.hide_adult_content)
             and media is not None
@@ -1782,6 +1806,7 @@ class Controller:
 
     def request_stop(self):
         self.stop_event.set()
+        self.artwork.close()
 
 
 def _to_video_state(raw):

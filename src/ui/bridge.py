@@ -17,6 +17,7 @@ class UiBridge(QObject):
     log = Signal(str)                     # one log line
     stats_imported = Signal(int, str)     # (title count, message) from AniList import
     activity_stats = Signal(dict)        # account, loading, message from feed refresh
+    artwork_ready = Signal()            # cached TMDB artwork/episode metadata changed
     account_avatar = Signal(str, str)     # (username, avatar URL) — "" URL when none
     library_loaded = Signal(dict)         # {"username", "sections", "message"}
     anilist_synced = Signal(dict)         # {"account", "titles", "message"} two-way sync result

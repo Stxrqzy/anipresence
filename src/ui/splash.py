@@ -1,7 +1,7 @@
 """Startup splash screen: the logo over a loading bar while the app boots."""
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QTimer, Qt
 from PySide6.QtGui import QColor, QPainter, QPen
-from PySide6.QtWidgets import QLabel, QProgressBar, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QProgressBar, QVBoxLayout, QWidget
 
 
 class SplashWindow(QWidget):
@@ -32,9 +32,6 @@ class SplashWindow(QWidget):
 
         logo_label = OrbitWordmark()
         logo_label.setFixedHeight(112)
-        subtitle = QLabel("Chrome \u2192 AniList \u2192 Discord Rich Presence")
-        subtitle.setObjectName("splashSub")
-        subtitle.setAlignment(Qt.AlignCenter)
 
         self._bar = QProgressBar()
         self._bar.setObjectName("splashBar")
@@ -48,23 +45,18 @@ class SplashWindow(QWidget):
         layout.setSpacing(12)
         layout.addStretch(1)
         layout.addWidget(logo_label)
-        layout.addSpacing(10)
-        layout.addWidget(subtitle)
         layout.addSpacing(14)
         layout.addWidget(self._bar)
         layout.addStretch(1)
 
         self.setStyleSheet(
             f"""
-            QLabel {{ color: {self._sub_color}; font-size: 12px; }}
-            QLabel#splashSub {{ color: {self._sub_color}; font-size: 12px; }}
             QProgressBar#splashBar {{ background-color: {self._bar_bg};
                 border: none; border-radius: 4px; }}
             QProgressBar#splashBar::chunk {{ background-color: {self._accent.name()};
                 border-radius: 4px; }}
             """
         )
-        subtitle.setObjectName("splashSub")
         self._bar.setObjectName("splashBar")
 
         self._on_done = None

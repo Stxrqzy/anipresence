@@ -136,6 +136,52 @@ def test_sidebar_avatar_switch_rejects_stale_metadata_and_image(make_window, mon
     assert window._sidebar_account.icon().pixmap(QSize(34, 34)).toImage() != bob
 
 
+def test_continue_cards_use_local_progress_and_keep_activation_current(make_window, monkeypatch):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    app, window = make_window(smooth_animations=False)
+    ctrl = window.controller
+    ctrl.watchlog.add("Example", 2, "Browser", "https://watch/2", "", 300, media_id=42)
+    ctrl.recent.add({"title": "Example", "anilist_id": 42, "episode": 2,
+                     "episode_title": "The beginning", "url": "https://watch/2", "current_time": 300, "duration": 1200})
+    window._refresh_continue()
+    panel = window._continue_frame
+    assert len(panel.cards) == 1
+    card = panel.cards[0]
+    assert card.entry["current_time"] == 300
+    assert card.entry["episode_title"] == "The beginning"
+    window.show(); app.processEvents()
+    assert not card.grab().isNull()
+    opened = []
+    monkeypatch.setattr("src.ui.app.webbrowser.open", opened.append)
+    card.setFocus(); QTest.keyClick(card, Qt.Key_Space)
+    assert opened == ["https://watch/2"]
+    ctrl.recent.add({"title": "Example", "anilist_id": 42, "episode": 3, "url": "https://watch/3"})
+    window._refresh_continue()
+    assert panel.cards[0] is card
+    QTest.keyClick(card, Qt.Key_Space)
+    assert opened[-1] == "https://watch/3"
+    # Progress from episode 2 must not carry over to episode 3.
+    assert not card.entry.get("duration")
+    panel.view_all.emit()
+    assert window.stack.currentIndex() == 1
+
+
+def test_history_renders_episode_names_and_numeric_runs(make_window):
+    from PySide6.QtCore import Qt
+    from src.ui.anime_list import DETAIL_ROLE
+    app, window = make_window()
+    window._on_recent([{"title": "Example", "episode": 10, "last_watched": 30, "episode_title": "Ten"},
+                       {"title": "Example", "episode": 2, "last_watched": 20, "episode_title": "Two"}])
+    panel = window._history_modern
+    entries = [panel.list.item(i) for i in range(panel.list.count()) if panel.list.item(i).data(Qt.UserRole+1)]
+    assert [e.data(Qt.UserRole+1)["episode"] for e in entries] == [2, 10]
+    assert "Two" in entries[0].data(DETAIL_ROLE)
+    assert "Two" in window.recent_list.item(0).data(DETAIL_ROLE)
+    panel.search.setText("Two")
+    assert "1 entries" in panel.count.text()
+
+
 def test_automatic_updates_respect_opt_out_busy_and_downloaded_state(make_window, monkeypatch):
     app, window = make_window()
     requests = []

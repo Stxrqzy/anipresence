@@ -1,6 +1,23 @@
 """A deduplicated history view; AniList dates remain explicitly feed dates."""
 from .activity_stats import feed_episodes
 from .media_identity import MediaIdentity
+from datetime import datetime
+from itertools import groupby
+
+
+def sorted_history(entries, newest_first=True):
+    """Keep chronology/day groups; order adjacent runs of one anime numerically."""
+    ordered = sorted(entries, key=lambda e: e.get("last_watched") or 0, reverse=newest_first)
+    resolver = MediaIdentity(ordered)
+    def run_key(entry):
+        stamp = entry.get("last_watched") or 0
+        return datetime.fromtimestamp(stamp).date(), resolver.key(entry)
+    def number(entry):
+        try:
+            return float(entry.get("episode"))
+        except (ValueError, TypeError):
+            return float("inf")
+    return [entry for _, run in groupby(ordered, run_key) for entry in sorted(run, key=number)]
 
 
 def history_key(entry, resolver):
@@ -31,7 +48,7 @@ def combined_history(local, snapshot, references=(), cleared_before=0, dismissed
         else:
             target = entries[key]
             target["watch_seconds"] = target.get("watch_seconds", 0) + entry.get("watch_seconds", 0)
-            for field in ("url", "website", "cover", "current_time", "duration"):
+            for field in ("url", "website", "cover", "current_time", "duration", "episode_title"):
                 if not target.get(field) and entry.get(field):
                     target[field] = entry[field]
     for event in feed:
@@ -45,8 +62,9 @@ def combined_history(local, snapshot, references=(), cleared_before=0, dismissed
         if event["last_watched"] <= cleared_before or key in hidden:
             continue
         entries[key] = {"title": resolver.title(event), "episode": event["episode"],
+                        "aliases": event.get("aliases") or [], "season_year": event.get("season_year"),
                         "anilist_id": event["media_id"], "website": "AniList",
                         "url": event["url"] or f"https://anilist.co/anime/{event['media_id']}",
                         "cover": event["cover"], "last_watched": event["last_watched"],
                         "history_source": "AniList feed", "history_key": list(key)}
-    return sorted(entries.values(), key=lambda e: e.get("last_watched") or 0, reverse=True)
+    return sorted_history(entries.values())

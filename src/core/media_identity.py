@@ -72,7 +72,7 @@ def merge_title_rows(titles, references=()):
         if key[0] == "anilist":
             row["media_id"] = key[1]
         newer = (entry.get("last_watched") or 0) >= row["last_watched"]
-        for field in ("episode", "website", "url", "cover", "genres"):
+        for field in ("episode", "website", "url", "cover", "genres", "aliases", "season_year"):
             if entry.get(field) and (newer or not row.get(field)):
                 row[field] = entry[field]
         row["last_watched"] = max(row["last_watched"], entry.get("last_watched") or 0)

@@ -15,6 +15,23 @@ from the page title.
 
 ### Version 3.0 interface
 
+Version 3.0.4 redesigns **Continue Watching** with responsive artwork cards,
+episode names, measured progress, remaining time and keyboard-accessible resume
+buttons. **Settings → TMDB Artwork & Episode Names** accepts your TMDB API key
+or API Read Access Token. With a credential, TMDB posters are preferred across
+the app and Rich Presence; episode stills lead the Continue Watching cards.
+Unmatched anime, missing images and API failures keep AniList artwork. Metadata
+and validated images are cached locally, with lookups off the UI thread.
+AniList remains responsible for anime identification and list synchronization.
+History includes episode names from the player or TMDB and sorts consecutive
+entries for the same anime numerically within each day. The opening screen now
+shows just the Orbit wordmark and loading bar.
+
+TMDB matches use titles/aliases and release years; ambiguous remakes or season
+matches retain the fallback instead of guessing. Missing playback timing is
+shown as unrecorded. This product uses the TMDB API but is not endorsed or
+certified by TMDB.
+
 Version 3.0.3 brings **AniList feed episodes into Watch History** in both layouts,
 with refresh on page entry and every five minutes while History or Statistics is
 visible. Feed rows show list-update dates; local playback timing and watch links

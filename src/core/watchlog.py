@@ -211,6 +211,9 @@ class WatchLog:
                     entry["url"] = item["url"]
                 if item.get("cover"):
                     entry["cover"] = item["cover"]
+                for field in ("aliases", "season_year"):
+                    if item.get(field):
+                        entry[field] = item[field]
                 entry.setdefault("last_watched", time.time())
                 imported += seconds
             # 3) Titles with no watch time left at all (never watched locally,

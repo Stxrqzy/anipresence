@@ -31,6 +31,7 @@ class Config:
     browser: str = "chrome"
     chrome_path: str = ""
     anilist_cache_ttl_days: int = 7
+    tmdb_credential: str = ""
     show_paused_presence: bool = True
     presence_episode_names: bool = True
     presence_airing_dates: bool = True

@@ -44,6 +44,18 @@ def test_title_only_history_uses_one_label_across_episodes():
     assert {e["title"] for e in result} == {"NARUTO"}
 
 
+def test_history_sorts_numeric_runs_without_crossing_other_anime_or_days():
+    from src.core.history import sorted_history
+    stamp = datetime.combine(date.today(), datetime.min.time()).timestamp()
+    entries = [{"title": "A", "episode": 10, "last_watched": stamp+30},
+               {"title": "a", "episode": 2, "last_watched": stamp+20},
+               {"title": "B", "episode": 1, "last_watched": stamp+10},
+               {"title": "A", "episode": 1, "last_watched": stamp+5},
+               {"title": "A", "episode": 9, "last_watched": stamp-1}]
+    assert [e["episode"] for e in sorted_history(entries)] == [2, 10, 1, 1, 9]
+    assert [e["episode"] for e in sorted_history(entries, newest_first=False)] == [9, 1, 1, 2, 10]
+
+
 def test_history_uses_latest_feed_date_and_resolves_old_title_dismissals():
     older = snapshot(progress="1", days_ago=2)["items"][0]
     newer = snapshot(progress="1", days_ago=1)["items"][0]

@@ -911,6 +911,12 @@ class MainWindow(QMainWindow):
         self._nam = QNetworkAccessManager(self)
         self._nam.finished.connect(self._on_cover_reply)
         self._cover_cache_dir = APP_DIR / "covers"
+        self._artwork = self.controller.artwork
+        self._artwork.configure(self.cfg.data.tmdb_credential)
+        self._artwork_timer = QTimer(self)
+        self._artwork_timer.setSingleShot(True)
+        self._artwork_timer.setInterval(600)
+        self._artwork_timer.timeout.connect(self._refresh_artwork_views)
         self._recent_icon_pending = {}   # cover-url -> QListWidgetItem waiting for its icon
         self._recent_icon_fetching = set()  # cover-urls with a download in flight
         self._stats_icon_pending = {}    # cover-url -> QListWidgetItem (stats list)
@@ -2095,115 +2101,74 @@ class MainWindow(QMainWindow):
             self._controls_grid.addWidget(checkbox, i // columns, i % columns)
 
     # ----------------------------------------------------- continue watching
-    def _build_continue_strip(self):
-        """A horizontal strip of resumable titles, hidden when there are none."""
-        frame = QFrame()
-        frame.setObjectName("continueStrip")
-        frame.setProperty("visible", True)
-        lay = QVBoxLayout(frame)
-        lay.setContentsMargins(self._pad, (12 if not self.cfg.data.compact else 8), self._pad, (12 if not self.cfg.data.compact else 8))
-        lay.setSpacing(8)
-        lay.addWidget(self._field_label("Continue watching"))
+    def _on_tmdb_changed(self):
+        credential = self.tmdb_edit.text().strip()
+        if credential == self.cfg.data.tmdb_credential:
+            return
+        self.cfg.set(tmdb_credential=credential)
+        self._artwork.configure(credential)
+        self._refresh_artwork_views()
 
-        scroller = QScrollArea()
-        scroller.setObjectName("continueScroller")
-        scroller.setWidgetResizable(True)
-        scroller.setFrameShape(QFrame.NoFrame)
-        scroller.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroller.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroller.setFixedHeight(74)
-        self._continue_host = QWidget()
-        self._continue_layout = QHBoxLayout(self._continue_host)
-        self._continue_layout.setContentsMargins(0, 0, 0, 0)
-        self._continue_layout.setSpacing(8)
-        self._continue_layout.addStretch(1)
-        scroller.setWidget(self._continue_host)
-        lay.addWidget(scroller)
+    def _on_artwork_ready(self):
+        if not self._artwork_timer.isActive():
+            self._artwork_timer.start()
+
+    def _refresh_artwork_views(self):
+        if self._quitting:
+            return
+        self._on_recent(self.controller.recent.items())
+        self._refresh_continue()
+        self._refresh_stats()
+        if getattr(self, "_raw_detection_payload", None) and self._current_payload:
+            self._on_detection(self._raw_detection_payload)
+        payload = getattr(self, "_last_library_payload", None)
+        if payload and payload.get("username") == self.controller.active_anilist_account:
+            self._on_library_loaded(payload)
+        payload = getattr(self, "_last_calendar_payload", None)
+        if payload and payload.get("username") == self.controller.active_anilist_account:
+            self._on_calendar_loaded(payload)
+
+    def _build_continue_strip(self):
+        from .continue_watching import ContinueWatching
+        frame = ContinueWatching(self._cover_cache_path)
+        frame.configure(self.cfg.data.accent)
+        frame.activated.connect(lambda entry: webbrowser.open(entry["url"]) if entry.get("url") else None)
+        frame.removed.connect(self._remove_continue)
+        frame.view_all.connect(lambda: self.tabbar.setCurrentIndex(1))
         self._continue_frame = frame
         self._refresh_continue()
         return frame
 
     def _refresh_continue(self):
-        """Rebuild the resume strip from the watch log (called on updates)."""
+        """Combine resumable title records with actual per-episode playback."""
         frame = getattr(self, "_continue_frame", None)
         if frame is None:
             return
-        entries = self.controller.watchlog.continue_list(8)
-        current_title = ""
-        payload = getattr(self, "_current_payload", None)
-        if payload:
-            current_title = str(payload.get("title") or "").lower()
-
-        # Only touch the widget tree when the resume set actually changed, so
-        # the strip doesn't flicker on every detection poll.
-        fingerprint = tuple(
-            (e.get("title"), e.get("episode"), e.get("url"), e.get("cover"))
-            for e in entries
-            if e.get("url")
-        )
-        if fingerprint == getattr(self, "_continue_fingerprint", None):
-            return
-        self._continue_fingerprint = fingerprint
-
-        # Drop old tiles.
-        while self._continue_layout.count() > 1:  # keep the trailing stretch
-            item = self._continue_layout.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.deleteLater()
-        self._continue_icon_pending.clear()
-
-        for e in entries:
-            title = str(e.get("title") or "").strip()
-            if not title or title.lower() == current_title:
-                continue
-            ep = e.get("episode")
-            url = e.get("url")
-            if not url:
-                continue
-            label = f"Ep {ep} · {title}" if ep else title
-
-            tile = QFrame()
-            tile.setObjectName("continueTile")
-            tile.setCursor(Qt.PointingHandCursor)
-            row = QHBoxLayout(tile)
-            row.setContentsMargins(0, 0, 0, 0)
-            row.setSpacing(0)
-
-            btn = QToolButton()
-            btn.setObjectName("continueTileButton")
-            btn.setText(label)
-            btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-            btn.setAutoRaise(True)
-            btn.setCursor(Qt.PointingHandCursor)
-            btn.setToolTip(f"Resume '{title}'" + (f" at episode {ep}" if ep else "") + ("" if self.cfg.data.privacy_mode else f"\n{url}"))
-            btn.clicked.connect(lambda _=False, u=url: webbrowser.open(u))
-            cover = e.get("cover") or ""
-            if cover:
-                cached = self._cover_cache_path(cover)
-                if cached.exists():
-                    btn.setIcon(QIcon(str(cached)))
-                    btn.setIconSize(QSize(30, 42))
-                else:
-                    self._continue_icon_pending[cover] = btn
-                    if cover not in self._continue_icon_fetching:
-                        self._continue_icon_fetching.add(cover)
-                        self._nam.get(QNetworkRequest(QUrl(cover)))
-            row.addWidget(btn, 1)
-
-            close = QToolButton()
-            close.setObjectName("continueTileClose")
-            close.setText("✕")
-            close.setToolTip("Remove from continue watching")
-            close.setCursor(Qt.PointingHandCursor)
-            close.clicked.connect(lambda _=False, entry=dict(e): self._remove_continue(entry))
-            row.addWidget(close)
-
-            self._continue_layout.insertWidget(self._continue_layout.count() - 1, tile)
-
-        # Tiles with covers that haven't arrived yet get fetched lazily in
-        # _on_cover_reply, which swaps the icon in place.
-        frame.setVisible(bool(self._continue_layout.count() > 1))
+        from ..core.media_identity import MediaIdentity
+        titles = self.controller.watchlog.continue_list(None)
+        history = self.controller.watchlog.history(self.controller.recent.items())
+        resolver = MediaIdentity([*titles, *history])
+        local = {}
+        for entry in sorted(history, key=lambda e: e.get("last_watched") or 0, reverse=True):
+            if entry.get("history_source") == "Local" and entry.get("url"):
+                local.setdefault(resolver.key(entry), entry)
+        entries = []
+        for entry in titles:
+            measured = local.get(resolver.key(entry))
+            if measured:
+                entry = dict(entry, **{k: v for k, v in measured.items() if v is not None})
+            entries.append(entry)
+        entries.sort(key=lambda e: e.get("last_watched") or 0, reverse=True)
+        entries = [self._artwork.enrich(e, episode=True) for e in entries[:4]]
+        frame.set_entries(entries)
+        # Reuse the normal history cover downloader for AniList fallback images.
+        for entry in entries:
+            for field in ("episode_art", "backdrop", "banner_url", "cover"):
+                cover = entry.get(field) or ""
+                if cover and not self._cover_cache_path(cover).exists() and cover not in self._continue_icon_fetching:
+                    self._continue_icon_pending[cover] = frame
+                    self._continue_icon_fetching.add(cover)
+                    self._nam.get(QNetworkRequest(QUrl(cover)))
 
     def _remove_continue(self, title):
         """Remove one title from the continue-watching strip."""
@@ -2607,6 +2572,25 @@ class MainWindow(QMainWindow):
         grid.addLayout(col2, 1)
         cc.addLayout(grid)
         layout.addWidget(conn)
+
+        artwork = QFrame()
+        artwork.setObjectName("card")
+        art_layout = QVBoxLayout(artwork)
+        art_layout.setContentsMargins(self._pad, self._pad, self._pad, self._pad)
+        art_layout.addWidget(self._field_label("TMDB ARTWORK & EPISODE NAMES"))
+        self.tmdb_edit = QLineEdit(self.cfg.data.tmdb_credential)
+        self.tmdb_edit.setEchoMode(QLineEdit.Password)
+        self.tmdb_edit.setPlaceholderText("TMDB API key or API Read Access Token")
+        self.tmdb_edit.editingFinished.connect(self._on_tmdb_changed)
+        art_layout.addWidget(self.tmdb_edit)
+        hint = QLabel('TMDB posters and episode stills are preferred; AniList is the fallback. '
+                      '<a href="https://www.themoviedb.org/settings/api">Get a TMDB key</a>.')
+        hint.setWordWrap(True); hint.setOpenExternalLinks(True); hint.setObjectName("subLabel")
+        art_layout.addWidget(hint)
+        attribution = QLabel('This product uses the TMDB API but is not endorsed or certified by TMDB.')
+        attribution.setWordWrap(True); attribution.setObjectName("subLabel")
+        art_layout.addWidget(attribution)
+        layout.addWidget(artwork)
 
         # -- Custom anime sites ---------------------------------------------
         custom = QFrame()
@@ -3196,6 +3180,7 @@ class MainWindow(QMainWindow):
 
     def _on_library_loaded(self, payload):
         """Fill the Library sections from a background fetch."""
+        self._last_library_payload = payload
         self.library_refresh_btn.setEnabled(True)
         self.library_refresh_btn.setText("Refresh")
         message = payload.get("message") or ""
@@ -3222,6 +3207,7 @@ class MainWindow(QMainWindow):
                 listw.addItem(item)
                 continue
             for e in entries:
+                e = self._artwork.enrich(e)
                 title = e.get("title") or "?"
                 progress = int(e.get("progress") or 0)
                 episodes = e.get("episodes")
@@ -3307,6 +3293,7 @@ class MainWindow(QMainWindow):
 
     def _on_calendar_loaded(self, payload):
         """Fill the Calendar sub-tab from a background seasonal fetch."""
+        self._last_calendar_payload = payload
         import datetime
 
         listw = self._calendar_list
@@ -3345,6 +3332,7 @@ class MainWindow(QMainWindow):
             header.setFlags(Qt.NoItemFlags)
             listw.addItem(header)
             for e in buckets[label][1]:
+                e = self._artwork.enrich(e)
                 title = e.get("title") or "?"
                 ep = e.get("next_airing_episode")
                 prog = f"Ep {ep}" if ep else "premiering soon"
@@ -3390,6 +3378,7 @@ class MainWindow(QMainWindow):
                 listw.addItem(item)
                 continue
             for e in entries:
+                e = self._artwork.enrich(e)
                 title = e.get("title") or "?"
                 progress = e.get("progress") or 0
                 episodes = e.get("episodes")
@@ -3573,6 +3562,7 @@ class MainWindow(QMainWindow):
 
     def _on_recent_also_stats(self, _entries):
         """Keep the Stats tab live while it's the active tab."""
+        self._refresh_continue()
         if self.tabbar.currentIndex() == self._stats_tab_index:
             self._refresh_stats()
 
@@ -3583,6 +3573,7 @@ class MainWindow(QMainWindow):
         return label
 
     def _connect_signals(self):
+        self.bridge.artwork_ready.connect(self._on_artwork_ready)
         self.bridge.chrome_status.connect(self._on_chrome_status)
         self.bridge.discord_status.connect(self._on_discord_status)
         self.bridge.detection.connect(self._on_detection)
@@ -3738,6 +3729,7 @@ class MainWindow(QMainWindow):
         self._page_heading.light = self._applied_theme == "light"
         self._page_heading.update()
         self._brand.configure(self.cfg.data.accent, self._applied_theme)
+        self._continue_frame.configure(self.cfg.data.accent)
         self._sync_navigation(self.tabbar.currentIndex())
         if getattr(self, "_chart_view", None) is not None and hasattr(self, "_chart_days"):
             self._update_stats_chart(self._chart_days)
@@ -3876,13 +3868,13 @@ class MainWindow(QMainWindow):
         log_text = self.log_view.toPlainText()
         login_status = self.anilist_login_status.text()
         draft_fields = {name: getattr(self, name).text() for name in (
-            "anilist_secret_edit", "anilist_client_edit", "anilist_token_edit",
+            "anilist_secret_edit", "anilist_client_edit", "anilist_token_edit", "tmdb_edit",
             "pwa_url_edit", "update_feed_edit", "app_id_edit", "stats_search", "library_search")}
         chips = [(chip.text(), chip.objectName()) for chip in (self.chrome_chip, self.discord_chip)]
         self._tab_anim_stop()
         for sig in (self.bridge.chrome_status, self.bridge.discord_status,
                     self.bridge.detection, self.bridge.recent, self.bridge.log,
-                    self.bridge.stats_imported, self.bridge.activity_stats, self.bridge.account_avatar,
+                    self.bridge.stats_imported, self.bridge.activity_stats, self.bridge.account_avatar, self.bridge.artwork_ready,
                     self.bridge.library_loaded, self.bridge.anilist_synced,
                     self.bridge.anilist_sync_status, self.bridge.anilist_login,
                     self.bridge.update_status, self.bridge.calendar_loaded,
@@ -3908,7 +3900,7 @@ class MainWindow(QMainWindow):
         if getattr(self, "_last_recent", None) is not None:
             self._on_recent(self._last_recent)
         if self._current_payload:
-            self._on_detection(self._current_payload)
+            self._on_detection(getattr(self, "_raw_detection_payload", self._current_payload))
         else:
             self.show_placeholder()
         self._update_cover_size()
@@ -4124,6 +4116,8 @@ class MainWindow(QMainWindow):
         if payload.get("clear"):
             self.show_placeholder()
             return
+        self._raw_detection_payload = payload
+        payload = self._artwork.enrich(payload, episode=True)
         previous = self._current_payload or {}
         self._current_payload = payload
         self._load_banner(payload.get("banner_url") or "")
@@ -4543,7 +4537,7 @@ class MainWindow(QMainWindow):
 
     def _on_recent(self, entries):
         self._last_recent = entries
-        entries = self.controller.watchlog.history(entries)
+        entries = [self._artwork.enrich(e, episode=True) for e in self.controller.watchlog.history(entries)]
         self._history_modern.set_entries(entries)
         view = self.recent_list.view_state()
         self._recent_icon_pending.clear()
@@ -4562,7 +4556,7 @@ class MainWindow(QMainWindow):
             item.setData(Qt.UserRole, entry)
             item.setData(Qt.UserRole + 1, entry)
             source = "AniList feed · List-update date" if entry.get("history_source") == "AniList feed" else site
-            item.setData(DETAIL_ROLE, " · ".join(filter(None, (f"Episode {ep}" if ep else "", source))))
+            item.setData(DETAIL_ROLE, " · ".join(filter(None, (f"Episode {ep}" if ep else "", entry.get("episode_title"), source))))
             if not self.cfg.data.privacy_mode:
                 item.setToolTip(entry.get("url") or "")
             cover = entry.get("cover") or ""
@@ -4871,7 +4865,7 @@ class MainWindow(QMainWindow):
             pending = self._library_icon_pending
             pending.pop(orig, None)
         elif orig in self._continue_icon_pending:
-            # Continue-watching tile: a QToolButton, not a list item.
+            # Continue cards read the shared image cache when repainting.
             self._continue_icon_fetching.discard(orig)
             btn = self._continue_icon_pending.pop(orig)
             if reply.error() == QNetworkReply.NoError:
@@ -4886,8 +4880,7 @@ class MainWindow(QMainWindow):
                             cached.write_bytes(data)
                     except OSError:
                         pass
-                    btn.setIcon(QIcon(str(cached)))
-                    btn.setIconSize(QSize(30, 42))
+                    self._continue_frame.set_entries(self._continue_frame.entries)
             reply.deleteLater()
             return
         elif orig in self._match_icon_pending:
@@ -4928,6 +4921,7 @@ class MainWindow(QMainWindow):
                     if item.listWidget() is not None:
                         item.setIcon(QIcon(str(cached)))
                     self._history_modern.list.viewport().update()
+                    self._continue_frame.set_entries(self._continue_frame.entries)
             reply.deleteLater()
             return
 
@@ -5496,6 +5490,8 @@ class MainWindow(QMainWindow):
             self._login_flow.cancel()
             self._login_generation += 1
         self.controller.request_stop()
+        self._artwork_timer.stop()
+        self._artwork.close()
         super().closeEvent(event)
 
     def _fade_out_on_close(self):

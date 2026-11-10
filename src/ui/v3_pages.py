@@ -121,11 +121,12 @@ class HistoryPanel(QWidget):
         query = self.search.text().casefold().strip()
         days = (None,7,30,90)[self.period.currentIndex()]
         cutoff = time.time()-days*86400 if days else 0
-        entries = [e for e in self.entries if query in f"{e.get('title','')} {e.get('website','')}".casefold()
+        entries = [e for e in self.entries if query in f"{e.get('title','')} {e.get('episode_title','')} {e.get('website','')}".casefold()
                    and (self.anime.currentIndex() == 0 or e.get("title") == self.anime.currentText())
                    and (self.status.currentIndex() == 0 or history_status(e) == self.status.currentText())
                    and (not cutoff or (e.get("last_watched") or 0) >= cutoff)]
-        entries.sort(key=lambda e:e.get("last_watched") or 0, reverse=self.order.currentIndex() == 0)
+        from ..core.history import sorted_history
+        entries = sorted_history(entries, newest_first=self.order.currentIndex() == 0)
         last_day = None
         for entry in entries:
             stamp = entry.get("last_watched") or 0
@@ -137,8 +138,10 @@ class HistoryPanel(QWidget):
             item = QListWidgetItem(e.get("title") or "Unknown")
             item.setData(Qt.UserRole + 1, e)
             source = "AniList feed" if e.get("history_source") == "AniList feed" else history_status(e)
-            item.setData(DETAIL_ROLE, f"Episode {e.get('episode') or '—'} · {source}" +
+            name = (" · " + e["episode_title"]) if e.get("episode_title") else ""
+            item.setData(DETAIL_ROLE, f"Episode {e.get('episode') or '—'}{name} · {source}" +
                          (f" · {datetime.fromtimestamp(stamp):%b %d · %H:%M}" if stamp else ""))
+            item.setToolTip(f"{e.get('title')} · Episode {e.get('episode') or '—'}{name}")
             self.list.addItem(item)
         self.count.setText(f"{len(entries)} entries" if entries else "No matching history. Play an anime or adjust your filters.")
         self.list.restore_view(view)
@@ -352,6 +355,7 @@ class AnalyticsPanel(QWidget):
         from ..core.activity_stats import streak
         log=self.controller.watchlog
         snapshot=log.analytics()
+        snapshot["titles"] = [self.window()._artwork.enrich(e) for e in snapshot["titles"]]
         titles=snapshot["titles"]
         days=(None,7,30,90)[self.period.currentIndex()]
         cutoff=(date.today()-timedelta(days=days-1)).isoformat() if days else ""

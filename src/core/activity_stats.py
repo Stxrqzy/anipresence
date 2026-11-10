@@ -41,6 +41,7 @@ def feed_episodes(snapshot, newest_first=False):
                    "last_watched": float(item["createdAt"]), "activity_id": item.get("id"),
                    "title": title.get("romaji") or title.get("english") or title.get("native") or str(media["id"]),
                    "aliases": [value for value in title.values() if value],
+                   "season_year": media.get("seasonYear"),
                    "media_id": int(media["id"]), "episode": episode,
                    "genres": media.get("genres") or [], "url": media.get("siteUrl") or "",
                    "cover": (media.get("coverImage") or {}).get("large") or ""}
