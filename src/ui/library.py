@@ -1,15 +1,80 @@
 """Poster-grid library with real list counts, filters and stable sorting."""
 import math
-from PySide6.QtCore import Qt, QRectF, QPointF, QSize, Signal
-from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QPixmapCache
+from collections import OrderedDict
+from PySide6.QtCore import Qt, QRect, QRectF, QPointF, QSize, Signal
+from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QIcon
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QGridLayout, QHBoxLayout,
                               QLabel, QLineEdit, QListWidget, QListWidgetItem, QListView,
-                              QMenu, QPushButton, QStyledItemDelegate, QVBoxLayout, QWidget)
+                              QMenu, QPushButton, QStyledItemDelegate, QStyleOptionViewItem, QStyle, QVBoxLayout, QWidget)
 from .poster import draw_filled_pixmap
 from ..core.media_identity import MediaIdentity, normalized_title
 
 
+STATUSES = (("CURRENT", "Watching"), ("REPEATING", "Rewatching"), ("PLANNING", "Plan to watch"),
+            ("COMPLETED", "Completed"), ("PAUSED", "On hold"), ("DROPPED", "Dropped"))
+SECTIONS = {"CURRENT": "Watching", "REPEATING": "Watching", "PLANNING": "Planning",
+            "COMPLETED": "Completed", "PAUSED": "Paused", "DROPPED": "Dropped"}
+
+
+def draw_status(p, c, status):
+    if status in ("Watching", "CURRENT"):
+        eye = QPainterPath(QPointF(c.x()-8,c.y()))
+        eye.quadTo(c.x(),c.y()-9,c.x()+8,c.y()); eye.quadTo(c.x(),c.y()+9,c.x()-8,c.y())
+        p.drawPath(eye); p.drawEllipse(c, 2.5,2.5)
+    elif status == "REPEATING":
+        p.drawArc(QRectF(c.x()-7,c.y()-7,14,14),30*16,270*16)
+        p.drawLine(c+QPointF(7,-3),c+QPointF(7,-8));p.drawLine(c+QPointF(7,-3),c+QPointF(2,-3))
+    elif status in ("Completed", "COMPLETED"):
+        p.drawEllipse(c,8,8)
+        path=QPainterPath(c+QPointF(-4,0));path.lineTo(c+QPointF(-1,3));path.lineTo(c+QPointF(5,-4));p.drawPath(path)
+    elif status in ("Paused", "PAUSED"):
+        p.drawEllipse(c,8,8)
+        for x in (-3,3):p.drawLine(c+QPointF(x,-4),c+QPointF(x,4))
+    elif status == "REMOVE":
+        p.drawRect(QRectF(c.x()-5,c.y()-4,10,11))
+        p.drawLine(c+QPointF(-7,-6),c+QPointF(7,-6));p.drawLine(c+QPointF(-2,-8),c+QPointF(2,-8))
+        for x in (-2,2):p.drawLine(c+QPointF(x,-1),c+QPointF(x,4))
+    elif status in ("Dropped", "DROPPED"):
+        p.drawEllipse(c,8,8)
+        p.drawLine(c+QPointF(-3,-3),c+QPointF(3,3));p.drawLine(c+QPointF(3,-3),c+QPointF(-3,3))
+    else:
+        bookmark=QPainterPath(c+QPointF(-5,-7));bookmark.lineTo(c+QPointF(5,-7))
+        bookmark.lineTo(c+QPointF(5,7));bookmark.lineTo(c+QPointF(0,3));bookmark.lineTo(c+QPointF(-5,7));bookmark.closeSubpath();p.drawPath(bookmark)
+
+
+def status_icon(status, light):
+    pixmap = QPixmap(40,40);pixmap.fill(Qt.transparent);pixmap.setDevicePixelRatio(2)
+    p=QPainter(pixmap);p.setRenderHint(QPainter.Antialiasing)
+    p.setPen(QPen(QColor("#dc586a" if status=="REMOVE" else "#5d536c" if light else "#c6c1ce"),1.6))
+    draw_status(p,QPointF(10,10),status);p.end()
+    return QIcon(pixmap)
+
+
+class StatusMenu(QMenu):
+    def __init__(self, parent, light):
+        super().__init__(parent)
+        self.light = light
+        self.setMinimumWidth(230)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self);painter.setRenderHint(QPainter.Antialiasing)
+        for action in self.actions():
+            if action.isChecked():
+                rect = self.actionGeometry(action)
+                center = QPointF(rect.right()-16, rect.center().y())
+                color = QColor("#332b40" if self.light and action != self.activeAction() else "#f3eff9")
+                painter.setPen(QPen(color, 2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+                path=QPainterPath(center+QPointF(-4,0));path.lineTo(center+QPointF(-1,3));path.lineTo(center+QPointF(5,-4))
+                painter.drawPath(path)
+
+
 class PosterDelegate(QStyledItemDelegate):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.frames = OrderedDict()
+        self.frame_bytes = 0
+
     def sizeHint(self, option, index):
         return self.parent().gridSize()
 
@@ -17,21 +82,40 @@ class PosterDelegate(QStyledItemDelegate):
         window = self.parent().window()
         entry = window._artwork.enrich(index.data(Qt.UserRole), priority=5)
         area = QRectF(option.rect).adjusted(7, 5, -7, -33)
+        cover = entry.get("cover") or ""
+        dpr = painter.device().devicePixelRatioF()
+        pixmap = window._images.get(window._cover_cache_path(cover), math.ceil(area.width()*dpr), math.ceil(area.height()*dpr)) if cover else QPixmap()
+        if pixmap.isNull() and cover:
+            window._request_library_poster(cover)
+        key = (tuple(entry.get(field) for field in ("title", "title_english", "cover", "progress", "episodes", "mean_score", "status", "library_section")),
+               option.rect.width(),option.rect.height(),dpr,pixmap.cacheKey(),window._applied_theme,window.cfg.data.accent,option.font.key())
+        if key not in self.frames:
+            frame = QPixmap(math.ceil(option.rect.width()*dpr),math.ceil(option.rect.height()*dpr))
+            frame.setDevicePixelRatio(dpr);frame.fill(Qt.transparent)
+            local = QStyleOptionViewItem(option);local.rect=QRect(0,0,option.rect.width(),option.rect.height())
+            local.state &= ~(QStyle.State_Selected|QStyle.State_MouseOver)
+            canvas=QPainter(frame);self._paint_card(canvas,local,entry,pixmap);canvas.end()
+            cost=frame.width()*frame.height()*4
+            while self.frames and self.frame_bytes+cost>48*1024*1024:
+                _,old=self.frames.popitem(last=False)
+                self.frame_bytes-=old.width()*old.height()*4
+            self.frames[key]=frame;self.frame_bytes+=cost
+        self.frames.move_to_end(key)
+        painter.drawPixmap(option.rect.topLeft(),self.frames[key])
+        if option.state & (QStyle.State_Selected|QStyle.State_MouseOver):
+            painter.save();painter.setRenderHint(QPainter.Antialiasing)
+            painter.setPen(QPen(QColor(window.cfg.data.accent).lighter(125),2));painter.setBrush(Qt.NoBrush)
+            painter.drawRoundedRect(area,20,20);painter.restore()
+
+    def _paint_card(self, painter, option, entry, pixmap):
+        window = self.parent().window()
+        area = QRectF(option.rect).adjusted(7, 5, -7, -33)
         light = window._applied_theme == "light"
         accent = QColor(window.cfg.data.accent)
         p = painter; p.save(); p.setRenderHint(QPainter.Antialiasing)
         p.setPen(Qt.NoPen); p.setBrush(QColor("#ded8eb" if light else "#211b32")); p.drawRoundedRect(area, 20, 20)
-        cover = entry.get("cover") or ""
-        pixmap = QPixmapCache.find(cover) if cover else None
-        if pixmap is None:
-            pixmap = QPixmap(str(window._cover_cache_path(cover))) if cover else QPixmap()
-            if not pixmap.isNull():
-                pixmap = pixmap.scaled(640, 960, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                QPixmapCache.insert(cover, pixmap)
         if not pixmap.isNull():
             draw_filled_pixmap(p, area, pixmap, 20)
-        elif cover:
-            window._request_library_poster(cover)
         clip = QPainterPath(); clip.addRoundedRect(area, 20, 20)
         p.setClipPath(clip, Qt.IntersectClip)
         gradient = QLinearGradient(0, area.top()+area.height()*.42, 0, area.bottom())
@@ -68,23 +152,8 @@ class PosterDelegate(QStyledItemDelegate):
         badge = QRectF(area.right()-46, area.top()+12, 34,34)
         p.setBrush(QColor("#f4f7f5")); p.setPen(Qt.NoPen); p.drawEllipse(badge)
         p.setPen(QPen(QColor("#17221d"), 1.8)); p.setBrush(Qt.NoBrush)
-        c = badge.center(); status = entry.get("library_section")
-        if status == "Watching":
-            eye = QPainterPath(QPointF(c.x()-8,c.y()))
-            eye.quadTo(c.x(),c.y()-10,c.x()+8,c.y()); eye.quadTo(c.x(),c.y()+10,c.x()-8,c.y())
-            p.drawPath(eye); p.drawEllipse(c, 2.5,2.5)
-        elif status == "Completed":
-            p.drawEllipse(c,8,8)
-            path=QPainterPath(QPointF(c.x()-4,c.y()));path.lineTo(c.x()-1,c.y()+3);path.lineTo(c.x()+5,c.y()-4);p.drawPath(path)
-        elif status == "Paused":
-            p.drawLine(QPointF(c.x()-3,c.y()-6),QPointF(c.x()-3,c.y()+6))
-            p.drawLine(QPointF(c.x()+3,c.y()-6),QPointF(c.x()+3,c.y()+6))
-        elif status == "Dropped":
-            p.drawLine(QPointF(c.x()-5,c.y()-5),QPointF(c.x()+5,c.y()+5))
-            p.drawLine(QPointF(c.x()+5,c.y()-5),QPointF(c.x()-5,c.y()+5))
-        else:
-            bookmark=QPainterPath(QPointF(c.x()-5,c.y()-7));bookmark.lineTo(c.x()+5,c.y()-7)
-            bookmark.lineTo(c.x()+5,c.y()+7);bookmark.lineTo(c.x(),c.y()+3);bookmark.lineTo(c.x()-5,c.y()+7);bookmark.closeSubpath();p.drawPath(bookmark)
+        status = entry.get("library_section")
+        draw_status(p,badge.center(),entry.get("status") or status)
         p.setClipping(False)
         from PySide6.QtWidgets import QStyle
         if option.state & (QStyle.State_Selected | QStyle.State_MouseOver):
@@ -98,6 +167,7 @@ class PosterDelegate(QStyledItemDelegate):
 
 
 class PosterGrid(QListWidget):
+    status_requested = Signal(object, object)
     def __init__(self):
         super().__init__()
         self.setViewMode(QListView.IconMode)
@@ -115,6 +185,32 @@ class PosterGrid(QListWidget):
         self.setMinimumHeight(280)
         self.setGridSize(QSize(190, 302))
 
+    def badge_rect(self, item):
+        area = QRectF(self.visualItemRect(item)).adjusted(7,5,-7,-33)
+        return QRectF(area.right()-46,area.top()+12,34,34)
+
+    def mousePressEvent(self, event):
+        item = self.itemAt(event.position().toPoint())
+        if item and event.button() == Qt.LeftButton and self.badge_rect(item).contains(event.position()):
+            self.setCurrentItem(item)
+            self.status_requested.emit(item.data(Qt.UserRole), self.viewport().mapToGlobal(self.badge_rect(item).bottomLeft().toPoint()))
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def contextMenuEvent(self, event):
+        item = self.itemAt(event.pos()) or self.currentItem()
+        if item:
+            self.status_requested.emit(item.data(Qt.UserRole), event.globalPos())
+            event.accept()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Space and self.currentItem():
+            item=self.currentItem()
+            self.status_requested.emit(item.data(Qt.UserRole), self.viewport().mapToGlobal(self.badge_rect(item).bottomLeft().toPoint()))
+            event.accept();return
+        super().keyPressEvent(event)
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         columns = max(1, min(6, self.viewport().width()//175))
@@ -128,11 +224,13 @@ class LibraryPanel(QWidget):
     activated = Signal(object)
     refresh_requested = Signal()
     calendar_requested = Signal()
+    status_changed = Signal(object, str)
 
     def __init__(self):
         super().__init__()
         self.entries = []
         self.section = "All"
+        self.pending_edits = set()
         self.layout_root = QVBoxLayout(self); self.layout_root.setContentsMargins(0,0,0,0);self.layout_root.setSpacing(16)
         self.bar = QGridLayout();self.bar.setContentsMargins(0,0,0,0);self.bar.setSpacing(12)
         self.tabs = QWidget(); tab_layout=QGridLayout(self.tabs);tab_layout.setContentsMargins(0,0,0,0);tab_layout.setSpacing(8)
@@ -162,11 +260,38 @@ class LibraryPanel(QWidget):
         self.filters_button.toggled.connect(self.filter_box.setVisible)
         self.empty=QLabel("Add an AniList account and refresh to load your library.");self.empty.setObjectName("subLabel");self.empty.setWordWrap(True)
         self.layout_root.addWidget(self.empty)
+        self.notice=QLabel();self.notice.setObjectName("subLabel");self.notice.setWordWrap(True);self.notice.hide()
+        self.layout_root.addWidget(self.notice)
         self.grid=PosterGrid();self.layout_root.addWidget(self.grid,1)
+        self.grid.status_requested.connect(self.show_status_menu)
         self.grid.itemActivated.connect(lambda item:self.activated.emit(item.data(Qt.UserRole)))
         self.search.textChanged.connect(self.refresh)
         for control in (self.sort,self.genre,self.year,self.score,self.status):control.currentIndexChanged.connect(self.refresh)
         self.buttons["All"].setChecked(True)
+
+    def show_status_menu(self, entry, position):
+        from ..core.media_identity import media_id
+        window=self.window();account=window.controller.active_anilist_account
+        light=window._applied_theme=="light"
+        menu=StatusMenu(self.grid,light)
+        menu.setStyleSheet(f"QMenu {{background:{'#faf8fd' if light else '#19171e'};color:{'#302a39' if light else '#e5e1eb'};border:1px solid #635770;padding:8px;font-family:'Segoe UI';font-size:14px;}} "
+                          "QMenu::item {padding:12px 28px 12px 12px;} QMenu::item:selected {background:#6d38a1;color:white;} QMenu::separator {height:1px;background:#635770;margin:8px;}")
+        current=entry.get("status") or next((s for s,section in SECTIONS.items() if section==entry.get("library_section")),"")
+        def change(status):
+            if window.controller.active_anilist_account == account:
+                self.status_changed.emit(entry,status)
+        for status,label in STATUSES:
+            action=menu.addAction(status_icon(status,light),label)
+            action.setData(status);action.setCheckable(True);action.setChecked(status==current)
+            action.setEnabled(media_id(entry) not in self.pending_edits)
+            action.triggered.connect(lambda checked=False,s=status:change(s))
+        menu.addSeparator()
+        remove=menu.addAction(status_icon("REMOVE",light),"Remove from library")
+        remove.setData("REMOVE");remove.setEnabled(media_id(entry) not in self.pending_edits)
+        remove.triggered.connect(lambda:change("REMOVE"))
+        menu.aboutToHide.connect(menu.deleteLater)
+        self._status_menu=menu
+        menu.popup(position)
 
     def configure(self, light):
         ink="#25202f" if light else "#edeaf2";base="#e8e3ed" if light else "#201c2b"

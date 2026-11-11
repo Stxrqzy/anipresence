@@ -26,6 +26,9 @@ class AnimeDelegate(QStyledItemDelegate):
         entry = index.data(Qt.UserRole + 1)
         if not isinstance(entry, dict) or not entry.get("title"):
             return super().paint(painter, option, index)
+        window = self.parent().window()
+        if hasattr(window, "_artwork"):
+            entry = window._artwork.enrich(entry, episode=self.parent().property("variant") == "history", priority=5)
         opt = QStyleOptionViewItem(option)
         self.initStyleOption(opt, index)
         icon = QIcon(opt.icon)
@@ -40,9 +43,16 @@ class AnimeDelegate(QStyledItemDelegate):
         painter.setRenderHint(painter.RenderHint.Antialiasing)
         rect = option.rect.adjusted(12, 7, -14, -7)
         cover = QRect(rect.x(), rect.y(), 40, 56)
-        if not icon.isNull():
-            icon.paint(painter, cover, Qt.AlignCenter, QIcon.Normal)
+        window = self.parent().window()
+        url = entry.get("episode_art") or entry.get("cover") or ""
+        dpr = painter.device().devicePixelRatioF()
+        pixmap = window._images.get(window._cover_cache_path(url), math.ceil(40*dpr), math.ceil(56*dpr)) if url and hasattr(window, "_images") else QPixmap()
+        if not pixmap.isNull():
+            from .poster import draw_filled_pixmap
+            draw_filled_pixmap(painter, QRectF(cover), pixmap, 5)
         else:
+            if url and hasattr(window, "_request_library_poster"):
+                window._request_library_poster(url)
             painter.setPen(Qt.NoPen)
             painter.setBrush(QColor(120, 140, 180, 24))
             painter.drawRoundedRect(cover, 5, 5)
@@ -73,7 +83,12 @@ class AnimeDelegate(QStyledItemDelegate):
         painter.setPen(QPen(QColor(150,125,210,50),1)); painter.setBrush(QColor(130,110,190,10))
         painter.drawRoundedRect(area,10,10)
         rect=option.rect.adjusted(12,12,-14,-12)
-        pm=icon.pixmap(512,512) if not icon.isNull() else QPixmap(entry.get("cached_cover") or "")
+        window = self.parent().window()
+        url = entry.get("episode_art") or entry.get("cover") or ""
+        dpr = painter.device().devicePixelRatioF()
+        pm = window._images.get(window._cover_cache_path(url), math.ceil(112*dpr), math.ceil(64*dpr)) if url else QPixmap()
+        if url and pm.isNull():
+            window._request_library_poster(url)
         landscape = not pm.isNull() and pm.width() > pm.height()
         cover=QRect(rect.x(),rect.y(),112 if landscape and rect.width()>760 else 46,64)
         clip=QPainterPath(); clip.addRoundedRect(QRectF(cover),7,7)
@@ -110,6 +125,13 @@ class AnimeDelegate(QStyledItemDelegate):
         font.setPixelSize(12); font.setWeight(QFont.Normal); painter.setFont(font)
         painter.setPen(QColor("#716681" if light else "#b1a8c9"))
         detail=index.data(DETAIL_ROLE) or ""
+        if self.parent().property("variant") == "history" and entry.get("episode_title"):
+            old = (index.data(Qt.UserRole + 1) or {}).get("episode_title")
+            if old:
+                detail = detail.replace(old, entry["episode_title"])
+            else:
+                first, separator, rest = detail.partition(" · ")
+                detail = first + " · " + entry["episode_title"] + separator + rest
         painter.drawText(QRect(left,rect.y()+26,width,20),Qt.AlignVCenter,QFontMetrics(font).elidedText(detail,Qt.ElideRight,width))
         variant=self.parent().property("variant")
         if variant=="ranking": fraction=entry.get("share",0)

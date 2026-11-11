@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta
 from .media_identity import merge_title_rows
 
 
-def feed_episodes(snapshot, newest_first=False):
+def feed_episodes(snapshot, newest_first=False, unique=True):
     seen = set()
     for item in sorted(snapshot.get("items") or [], key=lambda e: e.get("createdAt") or 0, reverse=newest_first):
         media = item.get("media") or {}
@@ -34,9 +34,10 @@ def feed_episodes(snapshot, newest_first=False):
         seconds = max(1, min(600, float(duration))) * 60
         for episode in range(start, end+1):
             key = (int(media["id"]), episode)
-            if key in seen:
+            occurrence = key if unique or not item.get("id") else (item["id"], episode)
+            if occurrence in seen:
                 continue
-            seen.add(key)
+            seen.add(occurrence)
             yield {"key": key, "day": day.isoformat(), "seconds": seconds,
                    "last_watched": float(item["createdAt"]), "activity_id": item.get("id"),
                    "title": title.get("english") or title.get("romaji") or title.get("native") or str(media["id"]),

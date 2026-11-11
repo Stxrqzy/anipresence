@@ -120,3 +120,29 @@ def test_same_title_different_ids_survive_storage_and_targeted_removal(tmp_path)
     log.remove_title({"title": "Example", "media_id": 1})
     assert [e["media_id"] for e in log.analytics()["titles"]] == [2]
     assert sum(log.days().values()) == 200
+
+
+def test_non_episode_feed_events_are_visible_and_dismissable(tmp_path):
+    feed=snapshot(progress="",days_ago=400)
+    feed["items"][0]["status"]="completed"
+    log=WatchLog(tmp_path/"history.json");log.set_activity(feed)
+    rows=log.history([])
+    assert len(rows)==1 and rows[0]["activity_status"]=="Completed"
+    assert rows[0]["title"]=="NARUTO" and rows[0]["episode"] is None
+    assert not log.analytics()["episodes"]  # no invented dated episodes
+    log.dismiss_history(rows[0])
+    assert not log.history([])
+
+
+def test_distinct_rewatch_events_remain_in_history_without_double_counting_stats(tmp_path):
+    newer=snapshot(progress="1",days_ago=1)["items"][0]
+    older=snapshot(progress="1",days_ago=400)["items"][0]
+    older["id"]=2;newer["status"]="rewatched episode"
+    log=WatchLog(tmp_path/"history.json");log.set_activity({"items":[newer,older]})
+    rows=log.history([])
+    assert len(rows)==2
+    assert rows[0]["last_watched"]==newer["createdAt"]
+    assert rows[1]["last_watched"]==older["createdAt"]
+    assert len(log.analytics()["episodes"])==1
+    log.dismiss_history(rows[1])
+    assert len(log.history([]))==1

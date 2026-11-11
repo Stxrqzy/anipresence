@@ -88,7 +88,10 @@ class HistoryPanel(QWidget):
         body.addWidget(self.note)
         self.list = AnimeList(); self.list.setProperty("variant", "history")
         self.list.itemActivated.connect(lambda item: self.activated.emit(item.data(Qt.UserRole + 1)))
+        self.list.verticalScrollBar().valueChanged.connect(self._maybe_append)
         body.addWidget(self.list, 1)
+        self.more = button("Load older entries", self._append_history)
+        self.more.hide();body.addWidget(self.more)
         layout.addWidget(frame, 1)
         self.search.textChanged.connect(self.refresh)
         for control in (self.anime, self.status, self.period, self.order): control.currentIndexChanged.connect(self.refresh)
@@ -105,8 +108,11 @@ class HistoryPanel(QWidget):
                 self.filters.addWidget(control, 0, i)
         super().resizeEvent(event)
 
-    def set_entries(self, entries):
+    def set_entries(self, entries, ordered=False):
+        if entries == self.entries:
+            return
         self.entries = list(entries)
+        self._ordered = ordered
         selected = self.anime.currentText()
         self.anime.blockSignals(True)
         self.anime.clear(); self.anime.addItem("All anime")
@@ -126,25 +132,47 @@ class HistoryPanel(QWidget):
                    and (self.status.currentIndex() == 0 or history_status(e) == self.status.currentText())
                    and (not cutoff or (e.get("last_watched") or 0) >= cutoff)]
         from ..core.history import sorted_history
-        entries = sorted_history(entries, newest_first=self.order.currentIndex() == 0)
-        last_day = None
-        for entry in entries:
+        if self.order.currentIndex() != 0 or not getattr(self, "_ordered", False):
+            entries = sorted_history(entries, newest_first=self.order.currentIndex() == 0)
+        self.filtered = entries
+        self._shown = 0
+        self._last_day = None
+        filters = (query, self.anime.currentText(), self.status.currentText(), days, self.order.currentIndex())
+        limit = max(250, getattr(self, "_display_limit", 250)) if filters == getattr(self, "_last_filters", None) else 250
+        self._last_filters = filters
+        self._append_history(limit=limit)
+        self.count.setText(f"{len(entries)} entries" if entries else "No matching history. Play an anime or adjust your filters.")
+        self.list.restore_view(view)
+
+    def _maybe_append(self, value):
+        if value > 0 and value >= self.list.verticalScrollBar().maximum()-200:
+            self._append_history()
+
+    def _append_history(self, checked=False, limit=250):
+        if not hasattr(self, "filtered"):
+            return
+        end = min(len(self.filtered), self._shown+limit)
+        self.list.setUpdatesEnabled(False)
+        for entry in self.filtered[self._shown:end]:
             stamp = entry.get("last_watched") or 0
             day = datetime.fromtimestamp(stamp).strftime("%b %d, %Y") if stamp else "Earlier history"
-            if day != last_day:
+            if day != self._last_day:
                 item = QListWidgetItem(day); item.setFlags(Qt.NoItemFlags)
-                self.list.addItem(item); last_day = day
+                self.list.addItem(item); self._last_day = day
             e = dict(entry, cached_cover=str(self.cover_path(entry.get("cover") or "")))
             item = QListWidgetItem(e.get("title") or "Unknown")
             item.setData(Qt.UserRole + 1, e)
             source = "AniList feed" if e.get("history_source") == "AniList feed" else history_status(e)
             name = (" · " + e["episode_title"]) if e.get("episode_title") else ""
-            item.setData(DETAIL_ROLE, f"Episode {e.get('episode') or '—'}{name} · {source}" +
+            episode = e.get("activity_status") or f"Episode {e.get('episode') or '—'}{name}"
+            item.setData(DETAIL_ROLE, f"{episode} · {source}" +
                          (f" · {datetime.fromtimestamp(stamp):%b %d · %H:%M}" if stamp else ""))
             item.setToolTip(f"{e.get('title')} · Episode {e.get('episode') or '—'}{name}")
             self.list.addItem(item)
-        self.count.setText(f"{len(entries)} entries" if entries else "No matching history. Play an anime or adjust your filters.")
-        self.list.restore_view(view)
+        self._shown = end
+        self._display_limit = max(250, end)
+        self.more.setVisible(end < len(self.filtered))
+        self.list.setUpdatesEnabled(True)
 
 
 class ActivityPanel(QWidget):
@@ -355,7 +383,7 @@ class AnalyticsPanel(QWidget):
         from ..core.activity_stats import streak
         log=self.controller.watchlog
         snapshot=log.analytics()
-        snapshot["titles"] = [self.window()._artwork.enrich(e) for e in snapshot["titles"]]
+        snapshot["titles"] = [self.window()._artwork.enrich(e, request=False) for e in snapshot["titles"]]
         titles=snapshot["titles"]
         days=(None,7,30,90)[self.period.currentIndex()]
         cutoff=(date.today()-timedelta(days=days-1)).isoformat() if days else ""
@@ -399,10 +427,10 @@ class AnalyticsPanel(QWidget):
         status = ("Last feed refresh: " + datetime.fromtimestamp(feed["fetched_at"]).strftime("%b %d, %H:%M")
                   if feed.get("fetched_at") else "No AniList feed cached yet. Add an account and refresh AniList.")
         if feed.get("truncated"):
-            status += " · Limited to the newest 1,000 activity entries."
+            status += " · Older activity is still being loaded; refresh to continue."
         self.note.setText(f"{format_hours(estimated)} estimated in this range. Local episode timing takes priority. "
                          "Feed dates are list-update dates; grouped episodes share that date. "
-                         "Up to six months of available activity; missing durations use 24 min. "
+                          "All available feed history; missing durations use 24 min. "
                          "All-time list totals are reconciled, not added again. " + status +
                          ("\n"+self.sync_message if self.sync_message else ""))
         return snapshot

@@ -42,6 +42,9 @@ class WatchLog:
         self._episodes = {}
         self._history_cleared_before = 0
         self._history_dismissed = []
+        self.revision = 0
+        self._analytics_cache = None
+        self._history_cache = None
         self._load()
 
     def _load(self):
@@ -63,6 +66,7 @@ class WatchLog:
             self._days, self._titles, self._sections = {}, {}, {}
 
     def _save(self):
+        self.revision += 1
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             self._path.write_text(
@@ -255,18 +259,33 @@ class WatchLog:
     def analytics(self):
         from .activity_stats import reconcile
         with self._lock:
+            key = (self.revision, date.today())
+            if self._analytics_cache and self._analytics_cache[0] == key:
+                return copy.deepcopy(self._analytics_cache[1])
             references = [e for entries in self._sections.values() for e in entries]
             values = copy.deepcopy((self._titles, self._days, self._episodes, self._activity, references))
-        return reconcile(*values)
+        result = reconcile(*values)
+        with self._lock:
+            if key[0] == self.revision:
+                self._analytics_cache = (key, result)
+        return copy.deepcopy(result)
 
-    def history(self, local):
+    def history(self, local, copy_result=True):
+        """Return history; UI readers may borrow the immutable cached snapshot."""
         from .history import combined_history
         with self._lock:
+            key = (self.revision, local)
+            if self._history_cache and self._history_cache[0] == key:
+                return copy.deepcopy(self._history_cache[1]) if copy_result else self._history_cache[1]
             references = [dict(value, title=value.get("title") or name) for name, value in self._titles.items()]
             references.extend(e for entries in self._sections.values() for e in entries)
             snapshot, references, dismissed = copy.deepcopy((self._activity, references, self._history_dismissed))
             cutoff = self._history_cleared_before
-        return combined_history(local, snapshot, references, cutoff, dismissed)
+        result = combined_history(local, snapshot, references, cutoff, dismissed)
+        with self._lock:
+            if key[0] == self.revision:
+                self._history_cache = (copy.deepcopy(key), result)
+        return copy.deepcopy(result) if copy_result else result
 
     def clear_feed_history(self):
         with self._lock:

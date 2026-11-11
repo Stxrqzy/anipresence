@@ -911,12 +911,18 @@ class MainWindow(QMainWindow):
         self._nam = QNetworkAccessManager(self)
         self._nam.finished.connect(self._on_cover_reply)
         self._cover_cache_dir = APP_DIR / "covers"
+        self._cover_paths = {}
         self._artwork = self.controller.artwork
         self._artwork.configure(self.cfg.data.tmdb_credential, self.cfg.data.cover_source)
         self._artwork_timer = QTimer(self)
         self._artwork_timer.setSingleShot(True)
         self._artwork_timer.setInterval(600)
         self._artwork_timer.timeout.connect(self._refresh_artwork_views)
+        from .image_cache import ImageCache
+        from .scrolling import ScrollController
+        self._images = ImageCache(self)
+        self._images.ready.connect(self._repaint_artwork)
+        self._scrolling = ScrollController(self)
         self._recent_icon_pending = {}   # cover-url -> QListWidgetItem waiting for its icon
         self._recent_icon_fetching = set()  # cover-urls with a download in flight
         self._stats_icon_pending = {}    # cover-url -> QListWidgetItem (stats list)
@@ -960,6 +966,7 @@ class MainWindow(QMainWindow):
         self._system_refresh.timeout.connect(self._maybe_resync_system_theme)
         self._build_ui()
         self._connect_signals()
+        self._scrolling.install()
         self._populate_anilist_accounts()
         self._load_toggles_from_config()
         self._build_tray()
@@ -1953,6 +1960,7 @@ class MainWindow(QMainWindow):
         if self._layout_mode == modern:
             return
         self._layout_mode = modern
+        self._history_state = None
         self.centralWidget().setObjectName("modernRoot" if modern else "classicRoot")
         self._sidebar.setVisible(modern)
         self._page_heading.setVisible(modern)
@@ -2038,6 +2046,8 @@ class MainWindow(QMainWindow):
         self._update_header_for_width()
         self._update_cover_size()
         QTimer.singleShot(0, self._update_cover_size)
+        if hasattr(self, "_last_recent"):
+            self._on_recent(self._last_recent)
 
     def _show_all_stats(self):
         self._stats_classic.setVisible(not self._stats_classic.isVisible())
@@ -2127,17 +2137,22 @@ class MainWindow(QMainWindow):
     def _refresh_artwork_views(self):
         if self._quitting:
             return
-        self._on_recent(self.controller.recent.items())
-        self._refresh_continue()
-        self._refresh_stats()
+        self._images.invalidate_missing()
+        self._repaint_artwork()
         if getattr(self, "_raw_detection_payload", None) and self._current_payload:
             self._on_detection(self._raw_detection_payload)
-        payload = getattr(self, "_last_library_payload", None)
-        if payload and payload.get("username") == self.controller.active_anilist_account:
-            self._on_library_loaded(payload)
-        payload = getattr(self, "_last_calendar_payload", None)
-        if payload and payload.get("username") == self.controller.active_anilist_account:
-            self._on_calendar_loaded(payload)
+
+    def _repaint_artwork(self):
+        if self._quitting:
+            return
+        for view in self.findChildren(AnimeList):
+            if view.isVisible():
+                view.viewport().update()
+        if hasattr(self, "_library_modern") and self._library_modern.isVisible():
+            self._library_modern.grid.viewport().update()
+        if hasattr(self, "_continue_frame") and self._continue_frame.isVisible():
+            for card in self._continue_frame.cards:
+                card.update()
 
     def _build_continue_strip(self):
         from .continue_watching import ContinueWatching
@@ -2157,7 +2172,7 @@ class MainWindow(QMainWindow):
             return
         from ..core.media_identity import MediaIdentity
         titles = self.controller.watchlog.continue_list(None)
-        history = self.controller.watchlog.history(self.controller.recent.items())
+        history = self.controller.watchlog.history(self.controller.recent.items(), copy_result=False)
         resolver = MediaIdentity([*titles, *history])
         local = {}
         for entry in sorted(history, key=lambda e: e.get("last_watched") or 0, reverse=True):
@@ -2271,6 +2286,7 @@ class MainWindow(QMainWindow):
         self._library_modern.activated.connect(lambda entry: webbrowser.open(entry["url"]) if entry.get("url") else None)
         self._library_modern.refresh_requested.connect(self._on_refresh_library)
         self._library_modern.calendar_requested.connect(lambda: self._show_library_calendar(True))
+        self._library_modern.status_changed.connect(self.controller.change_library_status)
         layout.addWidget(self._library_modern, 1)
         self._library_back = QPushButton("Back to library")
         self._library_back.clicked.connect(lambda: self._show_library_calendar(False))
@@ -3185,8 +3201,11 @@ class MainWindow(QMainWindow):
         self._history_refresh.setEnabled(not payload.get("loading"))
         self._history_refresh.setText(self._history_modern.sync_button.text())
         self._history_modern.note.setText(payload.get("message") or "Local playback + AniList feed · Feed dates are list-update dates.")
+        if payload.get("loading") and not payload.get("changed"):
+            return
         self._on_recent(self.controller.recent.items())
-        self._refresh_stats()
+        if self.tabbar.currentIndex() == self._stats_tab_index:
+            self._refresh_stats()
 
     def _refresh_history_feed(self):
         if not self.controller.active_anilist_account:
@@ -3224,6 +3243,12 @@ class MainWindow(QMainWindow):
         """Fill the Library sections from a background fetch."""
         if (payload.get("username") or "") != self.controller.active_anilist_account:
             return
+        if payload.get("message") and getattr(self, "_last_library_payload", None) and self._last_library_payload.get("sections"):
+            self._library_modern.notice.setText(payload["message"])
+            self._library_modern.notice.show()
+            self.library_refresh_btn.setEnabled(True)
+            self.library_refresh_btn.setText("Refresh")
+            return
         self._last_library_payload = payload
         self.library_refresh_btn.setEnabled(True)
         self.library_refresh_btn.setText("Refresh")
@@ -3255,7 +3280,7 @@ class MainWindow(QMainWindow):
                 listw.addItem(item)
                 continue
             for e in entries:
-                e = self._artwork.enrich(e)
+                e = self._artwork.enrich(e, request=False)
                 title = e.get("title") or "?"
                 progress = int(e.get("progress") or 0)
                 episodes = e.get("episodes")
@@ -3287,6 +3312,39 @@ class MainWindow(QMainWindow):
         for key, listw in self._library_section_lists.items():
             listw.restore_view(views[key])
         self._maybe_notify_airing(sections)
+
+    def _on_library_changed(self, payload):
+        if payload.get("account") != self.controller.active_anilist_account:
+            return
+        from ..core.media_identity import media_id
+        from .library import SECTIONS
+        panel = self._library_modern
+        identity = payload.get("media_id")
+        if payload.get("loading"):
+            panel.pending_edits.add(identity)
+            panel.notice.setText("Updating AniList…")
+            panel.notice.show()
+            return
+        panel.pending_edits.discard(identity)
+        if payload.get("error"):
+            panel.notice.setText(payload["error"])
+            panel.notice.show()
+            return
+        panel.notice.hide()
+        cached = getattr(self, "_last_library_payload", None)
+        if not cached:
+            self._on_refresh_library()
+            return
+        sections = {key: [e for e in rows if media_id(e) != identity] for key, rows in cached["sections"].items()}
+        original = next((e for rows in cached["sections"].values() for e in rows if media_id(e) == identity), None)
+        result = payload.get("result") or {}
+        if original and not result.get("removed"):
+            status = result["status"]
+            entry = dict(original, status=status, progress=result.get("progress", original.get("progress", 0)),
+                         updated_at=result.get("updatedAt") or original.get("updated_at", 0))
+            sections.setdefault(SECTIONS[status], []).append(entry)
+        self._on_library_loaded(dict(cached, sections=sections))
+        self._record_activity("Account", f"Library status changed to {payload['status']}", title=(original or {}).get("title"))
 
     def _on_library_search(self, _text):
         self._apply_library_filter()
@@ -3384,7 +3442,7 @@ class MainWindow(QMainWindow):
             header.setFlags(Qt.NoItemFlags)
             listw.addItem(header)
             for e in buckets[label][1]:
-                e = self._artwork.enrich(e)
+                e = self._artwork.enrich(e, request=False)
                 title = e.get("title") or "?"
                 ep = e.get("next_airing_episode")
                 prog = f"Ep {ep}" if ep else "premiering soon"
@@ -3430,7 +3488,7 @@ class MainWindow(QMainWindow):
                 listw.addItem(item)
                 continue
             for e in entries:
-                e = self._artwork.enrich(e)
+                e = self._artwork.enrich(e, request=False)
                 title = e.get("title") or "?"
                 progress = e.get("progress") or 0
                 episodes = e.get("episodes")
@@ -3461,8 +3519,9 @@ class MainWindow(QMainWindow):
         for key, listw in self._section_lists.items():
             listw.restore_view(views[key])
 
-    def _refresh_stats(self):
+    def _refresh_stats(self, visible_only=False):
         """Re-read the controller's WatchLog and repaint the Stats tab."""
+        self._stats_state = (id(self.controller.watchlog), self.controller.watchlog.revision)
         from datetime import date, timedelta
         from ..core.activity_stats import streak
         snapshot = self._analytics.refresh()
@@ -3474,6 +3533,8 @@ class MainWindow(QMainWindow):
         self._stat_cards["most"].setText(top[0]["title"] if top else "—")
         self._stat_cards["most"].setToolTip(top[0]["title"] if top else "No watch time recorded yet")
         self._stat_cards["titles"].setText(str(len(snapshot["titles"])))
+        if visible_only and self.cfg.data.ui_layout == "modern" and self._stats_classic.isHidden():
+            return
 
         if self._chart_view is not None:
             dates = [(date.today()-timedelta(days=i)).isoformat() for i in range(13,-1,-1)]
@@ -3575,27 +3636,31 @@ class MainWindow(QMainWindow):
 
     def _on_tab_changed(self, index):
         self._tab_anim_stop()
-        snapshot = (self.stack.grab() if self.isVisible() and self.cfg.data.smooth_animations
-                    and self.stack.currentIndex() != index else None)
+        snapshot = self.isVisible() and self.cfg.data.smooth_animations and self.stack.currentIndex() != index
         self.stack.setCurrentIndex(index)
         self._sync_navigation(index)
         if index == self._stats_tab_index:
-            self._refresh_stats()
+            state = (id(self.controller.watchlog), self.controller.watchlog.revision)
+            if state != getattr(self, "_stats_state", None):
+                self._refresh_stats(visible_only=True)
             self.controller.refresh_activity_stats()
         if index == 1:
             self._on_recent(getattr(self, "_last_recent", self.controller.recent.items()))
             self.controller.refresh_activity_stats()
         if index == self._library_tab_index:
-            self._on_refresh_library()
+            if not getattr(self, "_last_library_payload", None):
+                self._on_refresh_library()
+        if index == 0:
+            self._refresh_continue()
         if index == 5:
             self._activity_panel.refresh()
         self._animate_tab_in(self.stack.currentWidget(), snapshot)
 
     def _animate_tab_in(self, widget, snapshot=None):
-        if snapshot is None or not self.isVisible() or not self.cfg.data.smooth_animations:
+        if not snapshot or not self.isVisible() or not self.cfg.data.smooth_animations:
             return
         from .effects import PageTransition
-        overlay = PageTransition(self.stack, snapshot)
+        overlay = PageTransition(self.stack, accent=self.cfg.data.accent)
         self._tab_overlay = overlay
         self._tab_anim = overlay.animation
         overlay.animation.finished.connect(self._tab_anim_stop)
@@ -3635,6 +3700,7 @@ class MainWindow(QMainWindow):
         self.bridge.activity_stats.connect(self._on_activity_stats)
         self.bridge.account_avatar.connect(self._on_account_avatar)
         self.bridge.library_loaded.connect(self._on_library_loaded)
+        self.bridge.library_changed.connect(self._on_library_changed)
         self.bridge.anilist_synced.connect(self._on_anilist_synced)
         self.bridge.anilist_sync_status.connect(self._on_sync_status)
         self.bridge.anilist_login.connect(self._on_anilist_login_result)
@@ -3784,6 +3850,7 @@ class MainWindow(QMainWindow):
         self._continue_frame.configure(self.cfg.data.accent)
         self._library_modern.configure(self._applied_theme == "light")
         self._sync_navigation(self.tabbar.currentIndex())
+        self._scrolling.install()
         if getattr(self, "_chart_view", None) is not None and hasattr(self, "_chart_days"):
             self._update_stats_chart(self._chart_days)
         if self._cover_spinner is not None:
@@ -3908,6 +3975,8 @@ class MainWindow(QMainWindow):
             self._notify("AniPresence", f"Backup failed: {exc}")
 
     def _rebuild_ui(self):
+        self._history_state = None
+        self._stats_state = None
         if getattr(self, "_rebuilding", False):
             return
         self._rebuilding = True
@@ -3928,7 +3997,7 @@ class MainWindow(QMainWindow):
         for sig in (self.bridge.chrome_status, self.bridge.discord_status,
                     self.bridge.detection, self.bridge.recent, self.bridge.log,
                     self.bridge.stats_imported, self.bridge.activity_stats, self.bridge.account_avatar, self.bridge.artwork_ready,
-                    self.bridge.library_loaded, self.bridge.anilist_synced,
+                    self.bridge.library_loaded, self.bridge.library_changed, self.bridge.anilist_synced,
                     self.bridge.anilist_sync_status, self.bridge.anilist_login,
                     self.bridge.update_status, self.bridge.calendar_loaded,
                     self.bridge.share_tunnel, self.bridge.match_pending):
@@ -3938,6 +4007,7 @@ class MainWindow(QMainWindow):
                 pass
         self._build_ui()
         self._connect_signals()
+        self._scrolling.install()
         self._populate_anilist_accounts()
         self._load_toggles_from_config()
         self.log_view.setPlainText(log_text)
@@ -4077,6 +4147,8 @@ class MainWindow(QMainWindow):
             self._last_library_payload = None
             self._last_calendar_payload = None
             self._library_modern.reset_filters()
+            self._library_modern.pending_edits.clear()
+            self._library_modern.notice.hide()
             self._on_library_loaded({"username": name, "message": "Loading library…"})
             self._calendar_list.clear()
             self._refresh_stats()
@@ -4592,9 +4664,12 @@ class MainWindow(QMainWindow):
 
     def _on_recent(self, entries):
         self._last_recent = entries
-        entries = [self._artwork.enrich(e, episode=True, priority=10 if i < 40 else 50)
-                   for i, e in enumerate(self.controller.watchlog.history(entries))]
-        self._history_modern.set_entries(entries)
+        state = (id(self.controller.watchlog), self.controller.watchlog.revision, entries)
+        if state == getattr(self, "_history_state", None):
+            return
+        self._history_state = state
+        entries = self.controller.watchlog.history(entries, copy_result=False)
+        self._history_modern.set_entries(entries, ordered=True)
         view = self.recent_list.view_state()
         self._recent_icon_pending.clear()
         self.recent_list.clear()
@@ -4603,7 +4678,7 @@ class MainWindow(QMainWindow):
             item.setFlags(Qt.NoItemFlags)
             self.recent_list.addItem(item)
             return
-        for entry in entries:
+        for entry in (entries[:250] if self.cfg.data.ui_layout == "modern" else entries):
             title = entry.get("title", "?")
             ep = entry.get("episode")
             site = entry.get("website", "")
@@ -4612,11 +4687,11 @@ class MainWindow(QMainWindow):
             item.setData(Qt.UserRole, entry)
             item.setData(Qt.UserRole + 1, entry)
             source = "AniList feed · List-update date" if entry.get("history_source") == "AniList feed" else site
-            item.setData(DETAIL_ROLE, " · ".join(filter(None, (f"Episode {ep}" if ep else "", entry.get("episode_title"), source))))
+            item.setData(DETAIL_ROLE, " · ".join(filter(None, (entry.get("activity_status") or (f"Episode {ep}" if ep else ""), entry.get("episode_title"), source))))
             if not self.cfg.data.privacy_mode:
                 item.setToolTip(entry.get("url") or "")
             cover = entry.get("cover") or ""
-            if cover:
+            if cover and self.cfg.data.ui_layout == "classic":
                 cached = self._cover_cache_path(cover)
                 if cached.exists():
                     item.setIcon(QIcon(str(cached)))
@@ -4839,9 +4914,15 @@ class MainWindow(QMainWindow):
             self._nam.get(QNetworkRequest(QUrl(url)))
 
     def _cover_cache_path(self, url):
+        if url in self._cover_paths:
+            return self._cover_paths[url]
         ext = Path(urlsplit(url).path).suffix.lower() or ".jpg"
         name = hashlib.sha1(url.encode("utf-8", "ignore")).hexdigest()[:20] + ext
-        return self._cover_cache_dir / name
+        if len(self._cover_paths) >= 8192:
+            self._cover_paths.clear()
+        path = self._cover_cache_dir / name
+        self._cover_paths[url] = path
+        return path
 
     def _request_cover(self, url):
         cached = self._cover_cache_path(url)
@@ -4861,6 +4942,8 @@ class MainWindow(QMainWindow):
         self._nam.get(request)
 
     def _request_library_poster(self, url):
+        if self._cover_cache_path(url).exists():
+            return
         if url in self._poster_fetching or url in self._poster_failed or len(self._poster_fetching) >= 6:
             return
         self._poster_fetching.add(url)
@@ -4873,9 +4956,11 @@ class MainWindow(QMainWindow):
         orig = reply.request().url().toString()
         if reply.request().attribute(QNetworkRequest.User) == "library-poster":
             self._poster_fetching.discard(orig)
-            pixmap = QPixmap()
+            from PySide6.QtCore import QBuffer, QIODevice
+            from PySide6.QtGui import QImageReader
             data = bytes(reply.readAll()) if reply.error() == QNetworkReply.NoError else b""
-            if data and pixmap.loadFromData(data):
+            buffer = QBuffer();buffer.setData(data);buffer.open(QIODevice.ReadOnly)
+            if data and QImageReader(buffer).canRead():
                 try:
                     self._cover_cache_dir.mkdir(parents=True, exist_ok=True)
                     self._cover_cache_path(orig).write_bytes(data)
@@ -4883,7 +4968,8 @@ class MainWindow(QMainWindow):
                     self._poster_failed.add(orig)
             else:
                 self._poster_failed.add(orig)
-            self._library_modern.grid.viewport().update()
+            self._images.invalidate_missing()
+            self._repaint_artwork()
             reply.deleteLater()
             return
         if orig in self._banner_requests:

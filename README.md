@@ -15,6 +15,30 @@ from the page title.
 
 ### Version 3.0 interface
 
+Version 3.0.6 improves **navigation and scrolling** with cached poster cards and
+background image decoding, cached History/Statistics data, and lightweight tab
+feedback instead of full-page snapshot animations. Artwork arrivals repaint
+visible images rather than rebuilding every page. Wheel scrolling is animated,
+side scrollbars are hidden, and scrolling over Settings dropdowns or number
+fields scrolls the page without editing their values. Open dropdown menus still
+scroll normally.
+
+**History** fetches all available AniList feed pages, removing the previous
+six-month/1,000-activity limits. The first refresh backfills older activity;
+subsequent refreshes merge new entries into the saved full history. Long lists
+render in batches as you scroll, with a **Load older entries** button and search
+across the whole loaded feed. Separate rewatch events retain their feed dates.
+Completion, planning, pause and drop events appear
+without invented episode numbers or watch times. High-DPI episode images are
+decoded at their display resolution and painted without low-resolution previews.
+
+Click a **Library poster's status badge** (or right-click the poster / press Space)
+to choose Watching, Rewatching, Plan to watch, Completed, On hold, Dropped, or
+Remove from library. Connect the matching AniList account in Settings to edit.
+Changes preserve progress and update the cards/counts after AniList confirms;
+failed requests retain the existing status. Removing a list entry keeps recorded
+local viewing history.
+
 Version 3.0.5 rebuilds **Library** as a responsive poster grid with status/count
 pills, watched progress, status badges, search, genre/year/score/status filters,
 and five sort orders: Recently added, Title A–Z, Highest score, Newest year and

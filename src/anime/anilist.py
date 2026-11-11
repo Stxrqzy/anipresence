@@ -300,12 +300,16 @@ class AniListClient:
         self._timeout = timeout
         self._access_token = (access_token or "").strip()
         self._session = requests.Session()
+        self._rate_wait_until = 0
 
     def set_access_token(self, access_token):
         """Replace the bearer token used by authenticated mutations."""
         self._access_token = (access_token or "").strip()
 
     def _query(self, query, variables, _retry=True):
+        delay = self._rate_wait_until-time.time()
+        if delay > 0:
+            time.sleep(min(delay, 65))
         try:
             headers = {}
             if self._access_token:
@@ -317,6 +321,9 @@ class AniListClient:
                 timeout=self._timeout,
             )
             payload = resp.json()
+            response_headers = getattr(resp, "headers", {})
+            if response_headers.get("X-RateLimit-Remaining") == "0":
+                self._rate_wait_until = float(response_headers.get("X-RateLimit-Reset") or time.time()+60)
         except requests.RequestException as exc:
             raise AniListError(f"network error: {exc}") from exc
 
@@ -326,8 +333,7 @@ class AniListClient:
             # AniList enforces a ~90 req/min limit; one polite retry with backoff.
             if _retry and ("rate" in msg.lower() or resp.status_code == 429):
                 logger.info("AniList rate limit hit, retrying in 3s")
-                import time
-                time.sleep(3)
+                time.sleep(min(65, max(3, float(response_headers.get("Retry-After") or 3))))
                 return self._query(query, variables, _retry=False)
             raise AniListError(msg)
 
@@ -381,27 +387,43 @@ class AniListClient:
         data = self._query(_USER_LIST_QUERY, {"name": username})
         return self._parse_list_collection(data)
 
-    def fetch_user_activity(self, username, max_pages=20):
-        """Bounded six-month list-activity snapshot; dates are list-update dates."""
+    def fetch_user_activity(self, username, max_pages=None, previous=None, on_page=None, cancelled=None):
+        """Read all available list activity, then incrementally refresh its newest end."""
         user = (self._query(_USER_QUERY, {"name": username}).get("User") or {})
         if not user.get("id"):
             raise AniListError("AniList account not found")
-        since = int(time.time()) - 183 * 86400
-        items = {}
+        previous = previous or {}
+        if (previous.get("account") or "").casefold() != username.casefold():
+            previous = {}
+        known = {str(e["id"]): e for e in previous.get("items") or [] if e.get("id")}
+        items = dict(known)
         has_next = False
-        for page in range(1, max_pages + 1):
-            result = self._query(_ACTIVITY_QUERY, {"userId": int(user["id"]), "page": page, "since": since})
+        page = 0
+        while max_pages is None or page < max_pages:
+            if cancelled and cancelled():
+                raise AniListError("Activity refresh cancelled")
+            page += 1
+            result = self._query(_ACTIVITY_QUERY, {"userId": int(user["id"]), "page": page, "since": 0})
             payload = result.get("Page")
             if not isinstance(payload, dict):
                 raise AniListError("AniList activity response was incomplete")
-            for item in payload.get("activities") or []:
+            batch = payload.get("activities") or []
+            overlap = any(str(e.get("id")) in known for e in batch)
+            for item in batch:
                 if item.get("id"):
                     items[str(item["id"])] = item
             has_next = bool((payload.get("pageInfo") or {}).get("hasNextPage"))
+            if previous.get("complete") and overlap:
+                has_next = False
+            snapshot = {"items": list(items.values()), "since": 0, "truncated": has_next,
+                        "complete": not has_next, "fetched_at": time.time(), "account": user.get("name") or username}
+            if on_page:
+                on_page(snapshot, page)
             if not has_next:
                 break
-        return {"items": list(items.values()), "since": since, "truncated": has_next,
-                "fetched_at": time.time(), "account": user.get("name") or username}
+            if not batch:
+                raise AniListError("AniList returned an empty page before the end of the feed")
+        return snapshot
 
     def fetch_viewer(self):
         """Identify the account that owns this token."""
@@ -478,6 +500,31 @@ class AniListClient:
             {"mediaId": media_id, "progress": episode, "status": status},
         )
         return True
+
+    def change_list_status(self, media_id, status, account):
+        """Edit only the selected account's list status; preserve its progress."""
+        allowed = {"CURRENT", "REPEATING", "PLANNING", "COMPLETED", "PAUSED", "DROPPED", "REMOVE"}
+        if status not in allowed or int(media_id) <= 0:
+            raise AniListError("Invalid library status or anime")
+        viewer = self.fetch_viewer()
+        if viewer["name"].casefold() != account.casefold():
+            raise AniListError(f"Connect the AniList account {account} in Settings to edit this library.")
+        if status == "REMOVE":
+            data = self._query("query ($id: Int) { Media(id: $id, type: ANIME) { mediaListEntry { id } } }",
+                               {"id": int(media_id)})
+            entry = (data.get("Media") or {}).get("mediaListEntry") or {}
+            if entry.get("id"):
+                result = self._query("mutation ($id: Int) { DeleteMediaListEntry(id: $id) { deleted } }", {"id": entry["id"]})
+                if not (result.get("DeleteMediaListEntry") or {}).get("deleted"):
+                    raise AniListError("AniList did not remove this entry")
+            return {"removed": True}
+        data = self._query("""mutation ($mediaId: Int, $status: MediaListStatus) {
+            SaveMediaListEntry(mediaId: $mediaId, status: $status) { id status progress updatedAt }
+        }""", {"mediaId": int(media_id), "status": status})
+        result = data.get("SaveMediaListEntry") or {}
+        if result.get("status") != status:
+            raise AniListError("AniList did not confirm the status change")
+        return result
 
     def fetch_seasonal(self, season, year, per_page=50):
         """Fetch the top anime for a given season (e.g. ("SUMMER", 2026)).

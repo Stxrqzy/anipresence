@@ -52,9 +52,9 @@ class MediaIdentity:
 
     def title(self, entry):
         key = self.key(entry)
-        fallback = self.title_names.get(normalized_title(entry.get("title")), "Unknown")
+        fallback = self.title_names.get(normalized_title(entry.get("title")), entry.get("title") or "Unknown")
         if key[0] == "anilist":
-            return self.english.get(key[1]) or self.display.get(key[1], fallback)
+            return self.english.get(key[1]) or entry.get("title_english") or self.display.get(key[1], fallback)
         return entry.get("title_english") or fallback
 
 

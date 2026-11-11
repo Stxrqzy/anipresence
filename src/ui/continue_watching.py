@@ -42,6 +42,7 @@ class ContinueCard(QAbstractButton):
 
     def paintEvent(self, event):
         window = self.window()
+        self.entry = window._artwork.enrich(self.entry, episode=True, priority=2)
         light = window._applied_theme == "light"
         accent = QColor(window.cfg.data.accent)
         ink = QColor("#241b37" if light else "#f6f2ff")
@@ -56,14 +57,13 @@ class ContinueCard(QAbstractButton):
         pixmap = QPixmap()
         for field in ("episode_art", "backdrop", "banner_url", "cover"):
             if self.entry.get(field):
-                pixmap = QPixmap(str(self.cover_path(self.entry[field])))
+                dpr = self.devicePixelRatioF()
+                pixmap = window._images.get(self.cover_path(self.entry[field]), math.ceil(area.width()*dpr), math.ceil(area.height()*dpr))
                 if not pixmap.isNull():
                     break
         if not pixmap.isNull():
-            scaled = pixmap.scaled(int(area.width()), int(area.height()), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-            p.save(); p.setClipRect(area, Qt.IntersectClip)
-            p.drawPixmap(int((self.width()-scaled.width())/2), int((art_h-scaled.height())/2), scaled)
-            p.restore()
+            from .poster import draw_filled_pixmap
+            draw_filled_pixmap(p, area, pixmap, 0)
         else:
             gradient = QLinearGradient(0, 0, self.width(), art_h)
             gradient.setColorAt(0, accent.darker(250)); gradient.setColorAt(1, accent.darker(450))

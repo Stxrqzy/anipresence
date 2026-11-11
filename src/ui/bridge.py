@@ -20,6 +20,7 @@ class UiBridge(QObject):
     artwork_ready = Signal()            # cached TMDB artwork/episode metadata changed
     account_avatar = Signal(str, str)     # (username, avatar URL) — "" URL when none
     library_loaded = Signal(dict)         # {"username", "sections", "message"}
+    library_changed = Signal(dict)        # account, media_id, status, loading, result/error
     anilist_synced = Signal(dict)         # {"account", "titles", "message"} two-way sync result
     anilist_sync_status = Signal(dict)    # account, last_success, pending, error, activity
     anilist_login = Signal(dict)          # verified OAuth result (never logged)

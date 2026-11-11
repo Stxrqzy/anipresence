@@ -1,7 +1,7 @@
-"""Lightweight glass backdrop and snapshot-based navigation transitions."""
-from PySide6.QtCore import QEasingCurve, QParallelAnimationGroup, QPoint, QPropertyAnimation, Qt
-from PySide6.QtGui import QColor, QPainter, QRadialGradient
-from PySide6.QtWidgets import QGraphicsOpacityEffect, QLabel, QWidget
+"""Cached glass backdrop and lightweight navigation feedback."""
+from PySide6.QtCore import QEasingCurve, QParallelAnimationGroup, QPropertyAnimation, Qt, Property
+from PySide6.QtGui import QColor, QPainter, QRadialGradient, QPixmap
+from PySide6.QtWidgets import QLabel, QWidget
 
 
 class GlassBackground(QWidget):
@@ -10,6 +10,7 @@ class GlassBackground(QWidget):
         self.glass = True
         self.theme = "dark"
         self.accent = "#7c5cff"
+        self._cache_key = None
 
     def configure(self, enabled, theme, accent):
         self.glass, self.theme, self.accent = enabled, theme, accent
@@ -19,7 +20,15 @@ class GlassBackground(QWidget):
         super().paintEvent(event)
         if not self.glass:
             return
-        painter = QPainter(self)
+        key = (self.size(), self.devicePixelRatioF(), self.theme, self.accent)
+        if key == self._cache_key:
+            painter = QPainter(self)
+            painter.drawPixmap(0, 0, self._background)
+            return
+        self._cache_key = key
+        self._background = QPixmap(self.size()*self.devicePixelRatioF())
+        self._background.setDevicePixelRatio(self.devicePixelRatioF())
+        painter = QPainter(self._background)
         light = self.theme == "light"
         painter.fillRect(self.rect(), QColor("#edf0f8" if light else "#0e111c"))
         for x, y, radius, color, alpha in (
@@ -35,22 +44,23 @@ class GlassBackground(QWidget):
             tint.setAlpha(0)
             glow.setColorAt(1, tint)
             painter.fillRect(self.rect(), glow)
+        painter.end()
+        painter = QPainter(self)
+        painter.drawPixmap(0, 0, self._background)
 
 
 class PageTransition(QLabel):
-    """Animate a single captured frame instead of repainting charts at 60fps."""
-    def __init__(self, parent, pixmap):
+    """A small accent transition, without capturing or compositing whole pages."""
+    def __init__(self, parent, accent="#9955ff"):
         super().__init__(parent)
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
-        self.setPixmap(pixmap)
-        self.setGeometry(parent.rect())
+        self.accent = QColor(accent)
+        self.setGeometry(0, 0, parent.width(), 3)
         self.setStyleSheet("background: transparent; border: none;")
-        effect = QGraphicsOpacityEffect(self)
-        self.setGraphicsEffect(effect)
+        self._opacity = 1.0
         self.animation = QParallelAnimationGroup(self)
         for target, prop, start, end in (
-            (effect, b"opacity", 1.0, 0.0),
-            (self, b"pos", QPoint(0, 0), QPoint(0, -10)),
+            (self, b"opacity", 1.0, 0.0),
         ):
             animation = QPropertyAnimation(target, prop, self.animation)
             animation.setDuration(180)
@@ -60,6 +70,17 @@ class PageTransition(QLabel):
             self.animation.addAnimation(animation)
         self.show()
         self.raise_()
+
+    def _set_opacity(self, value):
+        self._opacity = value
+        self.update()
+
+    opacity = Property(float, lambda self: self._opacity, _set_opacity)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setOpacity(self._opacity)
+        painter.fillRect(self.rect(), self.accent)
 
 
 def glass_qss(theme, accent):

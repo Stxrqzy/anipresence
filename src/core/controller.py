@@ -1248,10 +1248,21 @@ class Controller:
             client = AniListClient(access_token=token)
             message = ""
             try:
-                snapshot = client.fetch_user_activity(account)
+                def cancelled():
+                    return self.stop_event.is_set() or self.watchlog is not log
+                def progress(snapshot, page):
+                    if not cancelled() and not snapshot.get("complete") and (page == 1 or page % 5 == 0):
+                        log.set_activity(snapshot)
+                        log.history(self.recent.items())
+                        log.analytics()
+                        self.bridge.activity_stats.emit({"account": account, "loading": True,
+                            "message": f"Loading AniList history · {len(snapshot['items']):,} activities fetched…", "changed": True})
+                snapshot = client.fetch_user_activity(account, previous=log.activity(), on_page=progress, cancelled=cancelled)
                 if self.stop_event.is_set() or self.watchlog is not log:
                     return
                 log.set_activity(snapshot)
+                log.history(self.recent.items())
+                log.analytics()
             except Exception as exc:
                 message = f"Activity refresh failed; keeping cached data: {exc}"
                 self.bridge.log.emit(message)
@@ -1280,19 +1291,67 @@ class Controller:
             )
             return
 
+        token = self.cfg.data.anilist_access_token if self.cfg.data.anilist_sync_account.casefold() == username.casefold() else ""
         def _run():
+            client = AniListClient(access_token=token)
             try:
-                entries = self.anilist.fetch_user_list(username)
+                with self._anilist_sync_lock:
+                    entries = client.fetch_user_list(username)
             except Exception as exc:  # noqa: BLE001 - report and stop
                 self.bridge.log.emit(f"Library fetch failed: {exc}")
                 self.bridge.library_loaded.emit(
                     {"username": username, "sections": {}, "message": f"Fetch failed: {exc}"}
                 )
                 return
+            finally:
+                client._session.close()
             sections = self._build_library_sections(entries)
             self.bridge.library_loaded.emit({"username": username, "sections": sections, "message": ""})
 
         threading.Thread(target=_run, daemon=True).start()
+
+    def change_library_status(self, entry, status):
+        from .media_identity import media_id
+        identity = media_id(entry)
+        account = self._active_account
+        token = self.cfg.data.anilist_access_token.strip()
+        log = self.watchlog
+        payload = {"account": account, "media_id": identity, "status": status}
+        if not token or not account or not identity:
+            self.bridge.library_changed.emit(dict(payload, error="Connect this AniList account in Settings to edit its library."))
+            return
+        with self._anilist_status_lock:
+            pending = getattr(self, "_library_edits", set())
+            self._library_edits = pending
+            key = (account.casefold(), identity)
+            if key in pending:
+                return
+            pending.add(key)
+        self.bridge.library_changed.emit(dict(payload, loading=True))
+        def run():
+            client = AniListClient(access_token=token)
+            result = {}
+            try:
+                with self._anilist_sync_lock:
+                    if token != self.cfg.data.anilist_access_token.strip() or self.stop_event.is_set():
+                        raise AniListError("Library change cancelled: account connection changed.")
+                    result["result"] = client.change_list_status(identity, status, account)
+                    sections = log.anilist_sections()
+                    saved = next((e for rows in sections.values() for e in rows if media_id(e) == identity), entry)
+                    sections = {label: [e for e in rows if media_id(e) != identity] for label, rows in sections.items()}
+                    if status != "REMOVE":
+                        label = {"CURRENT": "Watching", "REPEATING": "Watching", "PLANNING": "Planning",
+                                 "COMPLETED": "Completed", "PAUSED": "Paused", "DROPPED": "Dropped"}[status]
+                        sections.setdefault(label, []).append(dict(saved, status=status, progress=result["result"].get("progress", saved.get("progress", 0))))
+                    log.set_anilist_sections(sections)
+            except Exception as exc:
+                result["error"] = str(exc)
+            finally:
+                client._session.close()
+                with self._anilist_status_lock:
+                    self._library_edits.discard(key)
+                self.bridge.library_changed.emit(dict(payload, loading=False, **result))
+        threading.Thread(target=run, daemon=True).start()
 
     @staticmethod
     def _current_season(when=None):

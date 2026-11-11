@@ -268,3 +268,33 @@ def test_sync_new_entry_authenticated_lookup(monkeypatch):
     assert client.sync_progress(42, 1)
     assert all(r["headers"]["Authorization"] == "Bearer test-token" for r in requests)
     assert requests[-1]["json"]["variables"]["status"] == "CURRENT"
+
+
+@pytest.mark.parametrize("status", ["CURRENT","REPEATING","PLANNING","COMPLETED","PAUSED","DROPPED"])
+def test_library_status_edit_preserves_progress_and_checks_viewer(monkeypatch,status):
+    client=AniListClient(access_token="token");calls=[]
+    def query(text,variables):
+        calls.append((text,variables))
+        if "Viewer" in text:return {"Viewer":{"id":1,"name":"Alice"}}
+        assert variables=={"mediaId":42,"status":status}
+        assert "progress:" not in text
+        return {"SaveMediaListEntry":{"id":9,"status":status,"progress":7}}
+    monkeypatch.setattr(client,"_query",query)
+    assert client.change_list_status(42,status,"alice")["progress"]==7
+    assert len(calls)==2
+    with pytest.raises(AniListError,match="Connect"):
+        client.change_list_status(42,status,"Bob")
+    assert len(calls)==3  # identity query only; no cross-account mutation
+
+
+def test_remove_library_entry_uses_authenticated_entry_id(monkeypatch):
+    client=AniListClient(access_token="token");calls=[]
+    def query(text,variables):
+        calls.append((text,variables))
+        if "Viewer" in text:return {"Viewer":{"id":1,"name":"Alice"}}
+        if "mediaListEntry" in text:return {"Media":{"mediaListEntry":{"id":1234}}}
+        assert variables=={"id":1234}
+        return {"DeleteMediaListEntry":{"deleted":True}}
+    monkeypatch.setattr(client,"_query",query)
+    assert client.change_list_status(42,"REMOVE","Alice")=={"removed":True}
+    assert len(calls)==3

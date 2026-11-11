@@ -108,3 +108,34 @@ def test_activity_pagination_failure_does_not_return_partial_snapshot(monkeypatc
     monkeypatch.setattr(client, "_query", query)
     with pytest.raises(AniListError, match="rate limited"):
         client.fetch_user_activity("Alice")
+
+
+def test_entire_feed_passes_old_page_and_date_limits_then_refreshes_incrementally(monkeypatch):
+    client = AniListClient()
+    calls=[]
+    def query(text, variables):
+        if "User(name:" in text:return {"User":{"id":7,"name":"Alice"}}
+        calls.append(variables)
+        page=variables["page"]
+        assert variables["since"] == 0
+        return {"Page":{"pageInfo":{"hasNextPage":page<24},"activities":[event(page,createdAt=1000000000)]}}
+    monkeypatch.setattr(client,"_query",query)
+    result=client.fetch_user_activity("Alice")
+    assert len(calls)==24 and len(result["items"])==24
+    assert result["complete"] and not result["truncated"]
+    calls.clear()
+    refreshed=client.fetch_user_activity("Alice",previous=result)
+    assert len(calls)==1 and len(refreshed["items"])==24
+    assert refreshed["complete"]
+
+
+def test_partial_feed_reports_progress_before_a_failure(monkeypatch):
+    client=AniListClient();checkpoints=[]
+    def query(text,variables):
+        if "User(name:" in text:return {"User":{"id":7,"name":"Alice"}}
+        if variables["page"]==2:raise AniListError("offline")
+        return {"Page":{"pageInfo":{"hasNextPage":True},"activities":[event()]}}
+    monkeypatch.setattr(client,"_query",query)
+    with pytest.raises(AniListError,match="offline"):
+        client.fetch_user_activity("Alice",on_page=lambda snapshot,page:checkpoints.append(snapshot))
+    assert checkpoints[0]["items"] and not checkpoints[0]["complete"]

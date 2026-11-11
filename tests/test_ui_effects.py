@@ -97,6 +97,97 @@ def test_library_filters_sorting_account_reset_and_layout_switch(make_window):
     assert ConfigManager(window.cfg.path).data.cover_source == "anilist"
 
 
+def test_settings_wheel_scrolls_page_without_changing_controls(make_window):
+    from PySide6.QtCore import Qt, QPoint, QPointF
+    from PySide6.QtGui import QWheelEvent
+    app,window=make_window(smooth_animations=False)
+    window.show();window.resize(800,700);window.tabbar.setCurrentIndex(window._settings_tab_index)
+    app.processEvents()
+    bar=window._settings_page.verticalScrollBar()
+    assert bar.maximum()>300 and not bar.isVisible()
+    for control in (window.browser_combo,window.interval_spin,window.interval_spin.lineEdit()):
+        before=(window.browser_combo.currentIndex(),window.interval_spin.value())
+        bar.setValue(100)
+        control.setFocus()
+        event=QWheelEvent(QPointF(5,5),QPointF(control.mapToGlobal(QPoint(5,5))),QPoint(),QPoint(0,-120),
+                          Qt.NoButton,Qt.NoModifier,Qt.NoScrollPhase,False)
+        app.sendEvent(control,event)
+        assert (window.browser_combo.currentIndex(),window.interval_spin.value())==before
+        assert bar.value()>100
+
+
+def test_library_badge_menu_and_confirmed_status_updates(make_window):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    app,window=make_window(anilist_accounts=["Alice"],anilist_username="Alice",smooth_animations=False)
+    entry={"title":"Example","anilist_id":42,"status":"PLANNING","progress":7,"episodes":12}
+    window._on_library_loaded({"username":"Alice","sections":{"Planning":[entry]}})
+    panel=window._library_modern;requested=[]
+    panel.status_changed.disconnect()
+    panel.status_changed.connect(lambda entry,status:requested.append(status))
+    window.show();window.tabbar.setCurrentIndex(window._library_tab_index);app.processEvents()
+    QTest.mouseClick(panel.grid.viewport(),Qt.LeftButton,pos=panel.grid.badge_rect(panel.grid.item(0)).center().toPoint())
+    menu=panel._status_menu
+    actions={a.data():a for a in menu.actions() if a.data()}
+    assert set(actions)=={"CURRENT","REPEATING","PLANNING","COMPLETED","PAUSED","DROPPED","REMOVE"}
+    assert actions["PLANNING"].isChecked()
+    actions["REPEATING"].trigger();menu.close()
+    assert requested==["REPEATING"]
+    window._on_library_changed({"account":"Alice","media_id":42,"status":"REPEATING","error":"Offline"})
+    assert panel.entries[0]["status"]=="PLANNING"
+    window._on_library_changed({"account":"Alice","media_id":42,"status":"REPEATING",
+                               "result":{"status":"REPEATING","progress":7}})
+    assert panel.entries[0]["status"]=="REPEATING"
+    assert panel.entries[0]["progress"]==7
+    assert panel.buttons["Watching"].text()=="Watching  1"
+    window._on_library_changed({"account":"Bob","media_id":42,"status":"REMOVE","result":{"removed":True}})
+    assert len(panel.entries)==1
+    window._on_library_changed({"account":"Alice","media_id":42,"status":"REMOVE","result":{"removed":True}})
+    assert not panel.entries
+
+
+def test_artwork_notifications_and_cached_navigation_do_not_rebuild_lists(make_window,monkeypatch):
+    app,window=make_window(smooth_animations=False)
+    window._on_recent([{"title":"Example","episode":1}])
+    window._on_library_loaded({"username":"","sections":{"Watching":[{"title":"Example","anilist_id":1}]}})
+    window.show();app.processEvents()
+    monkeypatch.setattr(window._history_modern,"refresh",lambda:pytest.fail("history rebuilt"))
+    monkeypatch.setattr(window,"_refresh_stats",lambda:pytest.fail("stats rebuilt for artwork"))
+    monkeypatch.setattr(window,"_on_refresh_library",lambda:pytest.fail("cached library refetched"))
+    window._refresh_artwork_views()
+    for index in (1,window._library_tab_index,window._settings_tab_index,1,window._library_tab_index):
+        window.tabbar.setCurrentIndex(index)
+        app.processEvents()
+
+
+def test_history_loads_old_rows_in_batches_and_searches_all_entries(make_window):
+    app,window=make_window();panel=window._history_modern
+    panel.set_entries([{"title":"Example","episode":n,"last_watched":1000000} for n in range(1,1301)])
+    assert panel.count.text()=="1300 entries"
+    assert panel.list.count()<300
+    while panel._shown<len(panel.filtered):panel._append_history()
+    assert panel._shown==1300
+    panel.set_entries([{"title":f"Anime {n}","episode":1} for n in range(1300)])
+    panel.search.setText("Anime 1299")
+    assert panel.count.text()=="1 entries"
+
+
+def test_image_cache_decodes_once_and_retains_high_resolution(make_window,tmp_path):
+    from PySide6.QtGui import QImage,QColor
+    app,window=make_window()
+    image=QImage(1920,1080,QImage.Format_RGB32);image.fill(QColor("#6d389f"))
+    path=tmp_path/"episode.png";image.save(str(path))
+    cache=window._images
+    assert cache.get(path,1536,864).isNull()
+    assert cache.get(path,1536,864).isNull()
+    assert len(cache.pending)==1
+    loop=QEventLoop();cache.ready.connect(loop.quit);QTimer.singleShot(3000,loop.quit);loop.exec()
+    pixmap=cache.get(path,1536,864)
+    assert pixmap.width()==1536 and pixmap.height()==864
+    assert not cache.pending and cache.bytes<=cache.budget
+    assert cache.get(path,1536,864).cacheKey()==pixmap.cacheKey()
+
+
 def test_startup_update_is_immediate_and_surfaces_available_release(make_window, monkeypatch):
     requests = []
     def release(feed):

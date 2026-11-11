@@ -34,6 +34,7 @@ class ArtworkService:
         except (OSError, ValueError):
             pass
         self.worker = None
+        self._saved_at = 0
 
     def configure(self, credential, cover_source=None):
         with self.lock:
@@ -61,7 +62,7 @@ class ArtworkService:
             return item.get("value", {})
         return None
 
-    def enrich(self, entry, episode=False, priority=20):
+    def enrich(self, entry, episode=False, priority=20, request=True):
         result = dict(entry)
         if self.cover_source == "anilist" and entry.get("anilist_cover"):
             result["cover"] = entry["anilist_cover"]
@@ -92,7 +93,7 @@ class ArtworkService:
                     result["episode_title"] = data["episode_title"]
                 if data.get("title_english") and not entry.get("title_english"):
                     result["title"] = data["title_english"]
-            if (detail is None or show is None) and priority < self.pending.get(key, 9999):
+            if request and (detail is None or show is None) and priority < self.pending.get(key, 9999):
                 try:
                     self.jobs.put_nowait((priority, next(self.sequence), self.generation, self.credential, key, dict(entry), ep))
                     self.pending[key] = priority
@@ -161,11 +162,20 @@ class ArtworkService:
             if generation != self.generation or self.closed:
                 return
             self.cache[key] = {"at": time.time(), "value": value}
-            try:
-                self.directory.mkdir(parents=True, exist_ok=True)
-                (self.directory / "tmdb.json").write_text(json.dumps({"version": 2, "entries": self.cache, "responses": self.api_cache}), encoding="utf-8")
-            except OSError:
-                pass
+            if time.time()-self._saved_at < 2 and len(self.pending) > 1:
+                return
+            snapshot = {"version": 2, "entries": dict(self.cache), "responses": dict(self.api_cache)}
+        # Serialization and disk I/O must not hold the lock used by visible rows.
+        try:
+            self.directory.mkdir(parents=True, exist_ok=True)
+            path = self.directory / "tmdb.json.tmp"
+            path.write_text(json.dumps(snapshot), encoding="utf-8")
+            with self.lock:
+                if generation == self.generation and not self.closed:
+                    path.replace(self.directory / "tmdb.json")
+                    self._saved_at = time.time()
+        except OSError:
+            pass
 
     def close(self):
         self.closed = True

@@ -452,11 +452,13 @@ def test_refresh_library_emits_sections(tmp_path, app, monkeypatch):
     ctrl._active_account = "someone"
 
     class FakeAniList:
+        def __init__(self, **kwargs):
+            self._session = type("Session", (), {"close": lambda self: None})()
         def fetch_user_list(self, username):
             media = Media(id=7, title_romaji="Show B", episodes=24)
             return [{"media": media, "status": "CURRENT", "progress": 9}]
 
-    ctrl.anilist = FakeAniList()
+    monkeypatch.setattr("src.core.controller.AniListClient", FakeAniList)
 
     class Capture:
         def __init__(self):
@@ -478,6 +480,34 @@ def test_refresh_library_emits_sections(tmp_path, app, monkeypatch):
     watching = payload["sections"]["Watching"]
     assert watching and watching[0]["title"] == "Show B"
     assert watching[0]["progress"] == 9
+
+
+def test_library_edit_stays_with_original_account_and_preserves_history(tmp_path, app, monkeypatch):
+    ctrl=make_controller(tmp_path)
+    ctrl.switch_anilist_account("Alice")
+    ctrl.cfg.set(anilist_access_token="token")
+    old_log=ctrl.watchlog
+    old_log.add("Example",3,"site","","",120,media_id=42)
+    old_log.set_anilist_sections({"Planning":[{"title":"Example","anilist_id":42,"progress":3}]})
+    results=[]
+    ctrl.bridge.library_changed.connect(results.append)
+    class Client:
+        def __init__(self,**kwargs):
+            self._session=type("Session",(),{"close":lambda self:None})()
+        def change_list_status(self,identity,status,account):
+            assert (identity,status,account)==(42,"REPEATING","Alice")
+            ctrl.switch_anilist_account("Bob")
+            return {"status":"REPEATING","progress":3}
+    class Thread:
+        def __init__(self,target,**kwargs):self.target=target
+        def start(self):self.target()
+    monkeypatch.setattr("src.core.controller.AniListClient",Client)
+    monkeypatch.setattr("src.core.controller.threading.Thread",Thread)
+    ctrl.change_library_status({"anilist_id":42,"title":"Example"},"REPEATING")
+    assert results[-1]["account"]=="Alice" and not results[-1].get("error")
+    assert old_log.anilist_sections()["Watching"][0]["status"]=="REPEATING"
+    assert not ctrl.watchlog.anilist_sections()
+    assert sum(old_log.days().values())==120
 
 
 def test_sync_anilist_prefers_token_and_emits(tmp_path, app, monkeypatch):
@@ -558,7 +588,7 @@ def test_activity_refresh_preserves_cache_on_failure_and_throttles(tmp_path, app
     class Client:
         def __init__(self, **kwargs):
             self._session = type("Session", (), {"close": lambda self: None})()
-        def fetch_user_activity(self, account):
+        def fetch_user_activity(self, account, **kwargs):
             attempts.append(account)
             raise RuntimeError("offline")
     class Thread:
@@ -582,7 +612,7 @@ def test_activity_refresh_ignores_result_after_profile_switch(tmp_path, app, mon
     class Client:
         def __init__(self, **kwargs):
             self._session = type("Session", (), {"close": lambda self: None})()
-        def fetch_user_activity(self, account):
+        def fetch_user_activity(self, account, **kwargs):
             return {"items": [], "account": account, "fetched_at": time.time()}
     class Thread:
         def __init__(self, target, **kwargs): pending.append(target)
