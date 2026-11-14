@@ -18,9 +18,9 @@ class GlassBackground(QWidget):
 
     def paintEvent(self, event):
         super().paintEvent(event)
-        if self.theme == "oled":
+        if self.theme != "light":
             painter = QPainter(self)
-            painter.fillRect(self.rect(), Qt.black)
+            painter.fillRect(self.rect(), QColor("#000000" if self.theme == "oled" else "#141414"))
             return
         if not self.glass:
             return

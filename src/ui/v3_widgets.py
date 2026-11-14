@@ -118,7 +118,7 @@ def illustrated_surface(size, dpr, scene, accent, theme, art, sidebar=False):
     pixmap = QPixmap(size*dpr); pixmap.setDevicePixelRatio(dpr); pixmap.fill(Qt.transparent)
     painter = QPainter(pixmap); painter.setRenderHint(QPainter.Antialiasing); painter.setRenderHint(QPainter.SmoothPixmapTransform)
     rect = QRectF(0,0,size.width(),size.height())
-    base = QColor("#eef0f8" if theme=="light" else "#000000" if theme=="oled" else "#0e0d1b")
+    base = QColor("#eef0f8" if theme=="light" else "#000000" if theme=="oled" else "#141414")
     painter.fillRect(rect,base)
     if not art.isNull():
         painter.setOpacity(.38 if sidebar else .65)

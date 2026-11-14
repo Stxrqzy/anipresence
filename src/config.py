@@ -33,6 +33,7 @@ class Config:
     anilist_cache_ttl_days: int = 7
     tmdb_credential: str = ""
     cover_source: str = "tmdb"       # TMDB posters with AniList fallback, or AniList posters
+    overview_title_logo: bool = False
     show_paused_presence: bool = True
     presence_episode_names: bool = True
     presence_airing_dates: bool = True
@@ -72,6 +73,7 @@ class Config:
     extension_token: str = ""
     anilist_username: str = ""
     anilist_accounts: list = field(default_factory=list)
+    anilist_sessions: dict = field(default_factory=dict)
     anilist_sync_enabled: bool = False
     anilist_access_token: str = ""
     anilist_client_id: str = ""
@@ -132,6 +134,12 @@ class ConfigManager:
         # Migrate the pre-account single-username config: it becomes one account.
         if not self.data.anilist_accounts and self.data.anilist_username.strip():
             self.data.anilist_accounts = [self.data.anilist_username.strip()]
+        if self.data.anilist_access_token and self.data.anilist_sync_account:
+            self.data.anilist_sessions.setdefault(self.data.anilist_sync_account.casefold(),
+                                                 self.data.anilist_access_token)
+            if self.data.anilist_username.casefold() != self.data.anilist_sync_account.casefold():
+                self.data.anilist_access_token = self.data.anilist_sessions.get(self.data.anilist_username.casefold(), "")
+                self.data.anilist_sync_account = self.data.anilist_username if self.data.anilist_access_token else ""
 
     def save(self):
         with self._lock:

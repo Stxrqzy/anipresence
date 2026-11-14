@@ -41,6 +41,25 @@ def make_controller(tmp_path):
     return ctrl
 
 
+def test_account_switch_selects_own_token_and_removal_forgets_session(tmp_path, app):
+    ctrl = make_controller(tmp_path)
+    ctrl.cfg.set(anilist_access_token="alice-test", anilist_sync_account="Alice",
+                 anilist_sessions={"bob": "bob-test"})
+    ctrl.switch_anilist_account("Bob")
+    assert ctrl.cfg.data.anilist_access_token == "bob-test"
+    assert ctrl.cfg.data.anilist_sync_account == "Bob"
+    ctrl.switch_anilist_account("Alice")
+    assert ctrl.cfg.data.anilist_access_token == "alice-test"
+    ctrl.switch_anilist_account("Public")
+    assert not ctrl.cfg.data.anilist_access_token
+    ctrl.switch_anilist_account("Bob")
+    ctrl.remove_anilist_account("Bob")
+    assert "bob" not in ctrl.cfg.data.anilist_sessions
+    assert not ctrl.cfg.data.anilist_access_token
+    ctrl.switch_anilist_account("Alice")
+    assert ctrl.cfg.data.anilist_access_token == "alice-test"
+
+
 def _payload(video=None):
     return {
         "url": "https://gogoanime.example/watch/demon-slayer-episode-5",

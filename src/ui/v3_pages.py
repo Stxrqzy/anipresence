@@ -297,7 +297,7 @@ class MetricChart(QWidget):
         p=QPainter(self); p.setRenderHint(QPainter.Antialiasing)
         window=self.window(); accent=QColor(window.cfg.data.accent)
         light=getattr(window,"_applied_theme","dark")=="light"
-        text=QColor("#62597a" if light else "#aaa3c7")
+        text=QColor("#62597a" if light else "#aaaaaa")
         values=self.values
         if not values or not any(v for _,v in values):
             p.setPen(text); p.drawText(self.rect(),Qt.AlignCenter,"No recorded data for this period"); return

@@ -25,6 +25,7 @@ def make_window(tmp_path, monkeypatch):
     for method in ("refresh_library", "refresh_calendar", "fetch_account_avatar", "refresh_activity_stats"):
         monkeypatch.setattr(Controller, method, lambda *args, **kwargs: None)
     monkeypatch.setattr("src.ui.browse.catalogue", lambda *args: {"entries": [], "hasNextPage": False})
+    monkeypatch.setattr("src.ui.details.load_details", lambda *args: {})
     windows = []
 
     def create(**settings):
@@ -87,6 +88,57 @@ def test_browse_stale_responses_badge_and_confirmed_addition(make_window, monkey
                                 "result": {"status": "PLANNING", "progress": 0}})
     assert panel.grid.item(0).data(Qt.UserRole)["status"] == "PLANNING"
     assert window._library_modern.entries[0]["anilist_id"] == 42
+
+
+def test_detail_navigation_stale_results_pagination_and_watch(make_window, monkeypatch):
+    app, window = make_window(smooth_animations=False)
+    opened = []
+    monkeypatch.setattr("src.ui.app.webbrowser.open", opened.append)
+    window.show(); app.processEvents()
+    window._open_anime({"title": "First", "anilist_id": 1})
+    page = window._details
+    old = page.generation
+    window._open_anime({"title": "Second", "anilist_id": 2, "episodes": 1200})
+    assert not opened
+    assert len(page.cards) == 12
+    page.receive(old, {"title": "Wrong title"})
+    assert page.entry["title"] == "Second"
+    page.ranges.setCurrentIndex(99)
+    assert page.cards[0][0] == 1189 and page.cards[-1][0] == 1200
+    page.watch_episode(1200)
+    assert opened == ["https://ani.pm/anime?q=Second"]
+    page.go_back()
+    assert page.entry["title"] == "First"
+    page.go_back()
+    assert window.stack.currentIndex() == window.tabbar.currentIndex()
+    window._open_anime({"title": "Again"})
+    window._navigate(window.tabbar.currentIndex())
+    assert window.stack.currentWidget() is not page
+
+
+def test_overview_logo_fallback_and_account_flyout(make_window, monkeypatch, tmp_path):
+    from PySide6.QtGui import QPixmap, QColor
+    app, window = make_window(overview_title_logo=True, anilist_accounts=["Alice", "Bob"],
+                              anilist_username="Alice", anilist_access_token="alice-test",
+                              anilist_sync_account="Alice", anilist_sessions={"bob": "bob-test"})
+    window._current_payload = {"title": "Example", "title_logo": "https://test/logo.png"}
+    pm = QPixmap(600, 150); pm.fill(QColor("white"))
+    monkeypatch.setattr(window._images, "get", lambda *args: pm)
+    window._refresh_overview_logo()
+    assert not window.anime_logo.isHidden() and window.anime_title.isHidden()
+    window._current_payload = {"title": "No logo"}
+    window._refresh_overview_logo()
+    assert window.anime_logo.isHidden() and not window.anime_title.isHidden()
+    window._show_account_menu()
+    menu = window._account_menu
+    next(action for action in menu.actions() if action.text().startswith("Bob")).trigger()
+    assert window.cfg.data.anilist_access_token == "bob-test"
+    assert window.controller.active_anilist_account == "Bob"
+    menu.close()
+    window._on_anilist_disconnect()
+    assert "bob" not in window.cfg.data.anilist_sessions
+    window._switch_account_menu("Alice")
+    assert window.cfg.data.anilist_access_token == "alice-test"
 
 
 def test_oled_custom_font_theme_art_and_settings_cleanup(make_window, monkeypatch, tmp_path):
@@ -363,11 +415,16 @@ def test_continue_cards_use_local_progress_and_keep_activation_current(make_wind
     opened = []
     monkeypatch.setattr("src.ui.app.webbrowser.open", opened.append)
     card.setFocus(); QTest.keyClick(card, Qt.Key_Space)
+    assert not opened
+    assert window.stack.currentWidget() is window._details
+    window._details.watch.click()
     assert opened == ["https://watch/2"]
+    window._details.go_back()
     ctrl.recent.add({"title": "Example", "anilist_id": 42, "episode": 3, "url": "https://watch/3"})
     window._refresh_continue()
     assert panel.cards[0] is card
     QTest.keyClick(card, Qt.Key_Space)
+    window._details.watch.click()
     assert opened[-1] == "https://watch/3"
     # Progress from episode 2 must not carry over to episode 3.
     assert not card.entry.get("duration")
@@ -481,6 +538,9 @@ def test_anime_selection_has_no_focus_box_and_keeps_keyboard_activation(make_win
     monkeypatch.setattr("src.ui.app.webbrowser.open", opened.append)
     QTest.keyClick(view, Qt.Key_Down)
     QTest.keyClick(view, Qt.Key_Return)
+    assert not opened
+    assert window._details.entry["title"] == "Second"
+    window._details.watch.click()
     assert opened == ["https://example.com/2"]
     assert not view.grab().isNull()  # Exercise the custom delegate's paint path.
 

@@ -75,7 +75,7 @@ def oled_qss():
 
 
 def revamp_qss(theme, accent, glass=True):
-    """The v3 reference palette: violet glass, restrained glow, crisp hierarchy."""
+    """Reference-inspired panels with neutral dark surfaces and accent controls."""
     light = theme == "light"
     ink = "#282137" if light else "#f5f1ff"
     muted = "#776a90" if light else "#b5aacd"
@@ -118,3 +118,42 @@ def revamp_qss(theme, accent, glass=True):
     QWidget#modernRoot QHeaderView::section {{ background: {'#ece5f7' if light else '#252039'}; color: {muted}; border: none; padding: 12px 8px; font-weight: 600; }}
     QWidget#modernRoot QProgressBar::chunk {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 {accent},stop:1 {brighter}); }}
     """
+
+
+def neutral_surfaces(qss, theme, accent):
+    """Remove legacy violet/blue-gray surface tokens, retaining control accents."""
+    qss += f"""
+    QLabel#detailSynopsis {{ color: {'#292929' if theme == 'light' else '#e0e0e0'}; font-size: 15px; }}
+    QFrame#detailHero, QFrame#detailHero QLabel {{ background: transparent; }}
+    """
+    if theme == "light":
+        return qss
+    import re
+    from PySide6.QtGui import QColor
+    preserved = {QColor(accent).name(), QColor(accent).lighter(140).name(),
+                 QColor(accent).darker(150).name(), "#7c5cff", "#8b6cff", "#6a4ce0"}
+    def hex_color(match):
+        value = match[0]
+        c = QColor(value)
+        r, g, b = c.red(), c.green(), c.blue()
+        if value.lower() not in preserved and b >= r and b > g and max(r, g, b)-min(r, g, b) < 100:
+            gray = round(r*.299+g*.587+b*.114)
+            return f"#{gray:02x}{gray:02x}{gray:02x}"
+        return value
+    def rgba(match):
+        r, g, b = map(int, match.group(1, 2, 3))
+        if b >= r and b > g and max(r, g, b)-min(r, g, b) < 100:
+            gray = round(r*.299+g*.587+b*.114)
+            return f"rgba({gray},{gray},{gray},{match[4]})"
+        return match[0]
+    qss = re.sub(r"#[0-9a-fA-F]{6}\b", hex_color, qss)
+    qss = re.sub(r"rgba\(\s*(\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\s*\)", rgba, qss)
+    base = "#000000" if theme == "oled" else "#141414"
+    qss += f"""
+    QWidget#modernRoot, QWidget#classicRoot, QMainWindow {{ background: {base}; }}
+    QMenu {{ background: {base}; color: #eeeeee; border: 1px solid #383838; padding: 6px; }}
+    QMenu::item {{ padding: 10px 18px; }}
+    QMenu::item:selected {{ background: {accent}; color: white; }}
+    QFrame#detailHero, QFrame#detailHero QLabel {{ background: transparent; }}
+    """
+    return qss

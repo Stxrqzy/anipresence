@@ -45,13 +45,13 @@ class ContinueCard(QAbstractButton):
         self.entry = window._artwork.enrich(self.entry, episode=True, priority=2)
         light = window._applied_theme == "light"
         accent = QColor(window.cfg.data.accent)
-        ink = QColor("#241b37" if light else "#f6f2ff")
-        muted = QColor("#746783" if light else "#b9aecb")
+        ink = QColor("#241b37" if light else "#f5f5f5")
+        muted = QColor("#746783" if light else "#b9b9b9")
         p = QPainter(self); p.setRenderHint(QPainter.Antialiasing)
         rect = QRectF(self.rect().adjusted(1, 1, -1, -1))
         clip = QPainterPath(); clip.addRoundedRect(rect, 18, 18)
         p.setClipPath(clip)
-        p.fillRect(rect, QColor("#f4effa" if light else "#12101f"))
+        p.fillRect(rect, QColor("#f4effa" if light else "#000000" if window._applied_theme == "oled" else "#181818"))
         art_h = self.height()-166
         area = QRectF(1, 1, self.width()-2, art_h)
         pixmap = QPixmap()
@@ -71,11 +71,11 @@ class ContinueCard(QAbstractButton):
             p.setPen(accent.lighter(150)); font = QFont(self.font()); font.setPixelSize(48); p.setFont(font)
             p.drawText(area, Qt.AlignCenter, "▷")
         fade = QLinearGradient(0, art_h-42, 0, art_h+8)
-        base = QColor("#f4effa" if light else "#12101f")
+        base = QColor("#f4effa" if light else "#000000" if window._applied_theme == "oled" else "#181818")
         fade.setColorAt(0, QColor(base.red(), base.green(), base.blue(), 0)); fade.setColorAt(1, base)
         p.fillRect(QRectF(0, art_h-42, self.width(), 50), fade)
         glow = QRadialGradient(self.width()-20, self.height()+20, self.width()*.7)
-        glow.setColorAt(0, QColor(accent.red(), accent.green(), accent.blue(), 60 if self.underMouse() else 26))
+        glow.setColorAt(0, QColor(180, 180, 180, 35 if self.underMouse() else 0))
         glow.setColorAt(1, QColor(0, 0, 0, 0)); p.fillRect(rect, glow)
         x, width = 16, self.width()-32
         font = QFont(self.font()); font.setPixelSize(16); font.setWeight(QFont.Bold); p.setFont(font); p.setPen(ink)
@@ -90,7 +90,7 @@ class ContinueCard(QAbstractButton):
         current = max(0, float(self.entry.get("current_time") or 0))
         fraction = min(1, current/duration) if duration else 0
         bar = QRectF(x, art_h+94, width-46, 7)
-        p.setPen(Qt.NoPen); p.setBrush(QColor(135, 120, 165, 55)); p.drawRoundedRect(bar, 3.5, 3.5)
+        p.setPen(Qt.NoPen); p.setBrush(QColor(145, 145, 145, 55)); p.drawRoundedRect(bar, 3.5, 3.5)
         if duration:
             bar.setWidth(bar.width()*fraction)
             fill = QLinearGradient(bar.topLeft(), bar.topRight()); fill.setColorAt(0, accent); fill.setColorAt(1, accent.lighter(145))
@@ -111,7 +111,7 @@ class ContinueCard(QAbstractButton):
         triangle.lineTo(circle.center().x()-4, circle.center().y()+7); triangle.closeSubpath()
         p.fillPath(triangle, QColor("white"))
         p.setClipping(False); p.setBrush(Qt.NoBrush)
-        border = accent.lighter(140) if self.underMouse() or self.hasFocus() else QColor(accent.red(), accent.green(), accent.blue(), 110)
+        border = accent.lighter(140) if self.underMouse() or self.hasFocus() else QColor(155, 155, 155, 65)
         p.setPen(QPen(border, 2 if self.hasFocus() else 1)); p.drawRoundedRect(rect, 18, 18)
 
 

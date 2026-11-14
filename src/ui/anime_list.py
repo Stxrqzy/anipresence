@@ -80,7 +80,7 @@ class AnimeDelegate(QStyledItemDelegate):
         area=QRectF(option.rect.adjusted(2,2,-2,-2))
         light=self.parent().window()._applied_theme=="light"
         accent=QColor(self.parent().window().cfg.data.accent)
-        painter.setPen(QPen(QColor(150,125,210,50),1)); painter.setBrush(QColor(130,110,190,10))
+        painter.setPen(QPen(QColor(155,155,155,50),1)); painter.setBrush(QColor(145,145,145,10))
         painter.drawRoundedRect(area,10,10)
         rect=option.rect.adjusted(12,12,-14,-12)
         window = self.parent().window()
@@ -96,14 +96,14 @@ class AnimeDelegate(QStyledItemDelegate):
         if not pm.isNull():
             from .poster import draw_filled_pixmap
             draw_filled_pixmap(painter,QRectF(cover),pm,7)
-        else:painter.fillRect(cover,QColor(130,110,190,35))
+        else:painter.fillRect(cover,QColor(145,145,145,35))
         painter.restore()
         left=cover.right()+18; width=max(1,rect.right()-left)
         score=entry.get("mean_score")
         reserve=66 if score else 0
         title_rect=QRect(left,rect.y()+1,max(1,width-reserve),23)
         font=QFont(option.font); font.setPixelSize(15); font.setWeight(QFont.DemiBold)
-        painter.setFont(font); painter.setPen(QColor("#211b36" if light else "#f3efff"))
+        painter.setFont(font); painter.setPen(QColor("#211b36" if light else "#f3f3f3"))
         title=(f"{entry['rank']}. " if entry.get("rank") else "")+entry["title"]
         painter.drawText(title_rect,Qt.AlignVCenter,QFontMetrics(font).elidedText(title,Qt.ElideRight,title_rect.width()))
         if score:
@@ -123,7 +123,7 @@ class AnimeDelegate(QStyledItemDelegate):
             painter.setPen(gold)
             painter.drawText(QRect(rect.right()-37,rect.y(),37,24),Qt.AlignRight|Qt.AlignVCenter,str(score))
         font.setPixelSize(12); font.setWeight(QFont.Normal); painter.setFont(font)
-        painter.setPen(QColor("#716681" if light else "#b1a8c9"))
+        painter.setPen(QColor("#716681" if light else "#b1b1b1"))
         detail=index.data(DETAIL_ROLE) or ""
         if self.parent().property("variant") == "history" and entry.get("episode_title"):
             old = (index.data(Qt.UserRole + 1) or {}).get("episode_title")

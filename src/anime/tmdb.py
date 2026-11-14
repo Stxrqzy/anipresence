@@ -105,6 +105,19 @@ class TMDBClient:
                     result["poster"] = self.image(season_info["poster_path"])
         return result
 
+    def logo(self, show):
+        if not show.get("tmdb_id"):
+            return ""
+        images = self.get(f"/{show['tmdb_kind']}/{show['tmdb_id']}/images",
+                          include_image_language="en,null,ja").get("logos") or []
+        images = [image for image in images if image.get("file_path", "").endswith(".png")]
+        if not images:
+            return ""
+        best = max(images, key=lambda image: (
+            {"en": 3, None: 2, "ja": 1}.get(image.get("iso_639_1"), 0),
+            image.get("vote_average") or 0, image.get("width") or 0))
+        return self.image(best["file_path"])
+
     def episode(self, show, episode):
         if show.get("tmdb_kind") != "tv" or not episode:
             return {}
@@ -145,5 +158,6 @@ class TMDBClient:
                     still = max(images, key=lambda image: image.get("width") or 0).get("file_path")
             except requests.RequestException:
                 pass
-        return {"episode_title": data.get("name") or "",
-                "episode_art": self.image(still)}
+        return {"episode_title": data.get("name") or "", "episode_art": self.image(still),
+                **({"episode_description": data["overview"]} if data.get("overview") else {}),
+                **({"episode_air_date": data["air_date"]} if data.get("air_date") else {})}

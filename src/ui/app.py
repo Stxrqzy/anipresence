@@ -1136,7 +1136,12 @@ class MainWindow(QMainWindow):
             self.chrome_chip.show()
             self.discord_chip.show()
             self._header_hid_chips = False
-        self._sidebar_account.setVisible(self.cfg.data.ui_layout == "modern" and w>=900)
+        self._sidebar_account.setVisible(self.cfg.data.ui_layout == "modern")
+        if w < 900:
+            self._sidebar_account.setText("")
+        else:
+            active = self.controller.active_anilist_account
+            self._sidebar_account.setText(f"{active or 'Default profile'}\nAniList · Accounts")
 
     def _install_resize_filter(self):
         """Enable native edge-resize for the borderless window (Windows only)."""
@@ -1484,6 +1489,9 @@ class MainWindow(QMainWindow):
         self.log_view.setMaximumBlockCount(2000)
         log_layout.addWidget(self.log_view, 1)
         self.stack.addWidget(log_page)
+        from .details import DetailsPage
+        self._details = DetailsPage()
+        self.stack.addWidget(self._details)
 
         self.tabbar.addTab("Main")
         self.tabbar.addTab("Browse")
@@ -1499,6 +1507,7 @@ class MainWindow(QMainWindow):
         self._log_tab_index = self.tabbar.count() - 1
         self._settings_tab_index = self.tabbar.count() - 2
         self.tabbar.currentChanged.connect(self._on_tab_changed)
+        self.tabbar.tabBarClicked.connect(lambda index: self._on_tab_changed(index) if self.stack.currentWidget() is self._details else None)
         self._build_navigation_shell(outer)
 
         left = QHBoxLayout()          # dashboard row: left column | controls
@@ -1615,6 +1624,11 @@ class MainWindow(QMainWindow):
         self.anime_title.setObjectName("titleLabel")
         self.anime_title.setWordWrap(True)
         info.addWidget(self.anime_title)
+        from .details import Artwork
+        self.anime_logo = Artwork(fit=True)
+        self.anime_logo.setFixedHeight(95)
+        self.anime_logo.hide()
+        info.addWidget(self.anime_logo)
 
         self.match_label = QLabel("")
         self.match_label.setObjectName("subLabel")
@@ -1863,13 +1877,13 @@ class MainWindow(QMainWindow):
             button.setIconSize(QSize(18, 18))
             button.setToolTip(name)
             button.setAccessibleName(name)
-            button.clicked.connect(lambda checked=False, i=index: self.tabbar.setCurrentIndex(i))
+            button.clicked.connect(lambda checked=False, i=index: self._navigate(i))
             nav.addWidget(button)
             self._nav_buttons.append(button)
         self._sidebar_account = QPushButton("Default profile\nAniList · Add an account")
         self._sidebar_account.setObjectName("profileButton")
         self._sidebar_account.setIconSize(QSize(34, 34))
-        self._sidebar_account.clicked.connect(self._show_account_settings)
+        self._sidebar_account.clicked.connect(self._show_account_menu)
         nav.addSpacing(14)
         nav.addWidget(self._sidebar_account)
         body.addWidget(self._sidebar)
@@ -1904,6 +1918,36 @@ class MainWindow(QMainWindow):
         self._page_heading.variant = index
         self._page_heading.update()
 
+    def _navigate(self, index):
+        if self.tabbar.currentIndex() == index:
+            self._on_tab_changed(index)
+        else:
+            self.tabbar.setCurrentIndex(index)
+
+    def _show_account_menu(self):
+        menu = QMenu(self)
+        self._account_menu = menu
+        active = self.controller.active_anilist_account
+        for account in ["", *self.controller.anilist_accounts]:
+            connected = bool(self.cfg.data.anilist_sessions.get(account.casefold())) or bool(
+                account and self.cfg.data.anilist_access_token and self.cfg.data.anilist_sync_account.casefold() == account.casefold())
+            action = menu.addAction((account or "Default profile") + (" · Connected" if connected else " · Public" if account else ""))
+            action.setCheckable(True); action.setChecked(account == active)
+            action.triggered.connect(lambda checked=False, name=account: self._switch_account_menu(name))
+        menu.addSeparator()
+        menu.addAction("Add / connect account…", self._connect_account_menu)
+        menu.addAction("Account settings", self._show_account_settings)
+        menu.popup(self._sidebar_account.mapToGlobal(QPoint(self._sidebar_account.width(), 0)))
+
+    def _switch_account_menu(self, name):
+        index = self.anilist_combo.findData(name)
+        if index >= 0:
+            self.anilist_combo.setCurrentIndex(index)
+
+    def _connect_account_menu(self):
+        self._show_account_settings()
+        self._on_anilist_login()
+
     def _sync_more_actions(self):
         for action, button in self._more_links:
             action.setEnabled(button.isEnabled())
@@ -1923,7 +1967,7 @@ class MainWindow(QMainWindow):
         self._history_state = None
         self.centralWidget().setObjectName("modernRoot" if modern else "classicRoot")
         self._sidebar.setVisible(modern)
-        self._page_heading.setVisible(modern)
+        self._page_heading.setVisible(modern and self.stack.currentWidget() is not self._details)
         self._tabs_host.setVisible(not modern)
         self._classic_actions.setVisible(not modern)
         self._modern_actions.setVisible(modern)
@@ -2106,6 +2150,9 @@ class MainWindow(QMainWindow):
     def _repaint_artwork(self):
         if self._quitting:
             return
+        if hasattr(self, "_details") and self._details.isVisible():
+            self._details.refresh_artwork()
+        self._refresh_overview_logo()
         for view in self.findChildren(AnimeList):
             if view.isVisible():
                 view.viewport().update()
@@ -2486,6 +2533,10 @@ class MainWindow(QMainWindow):
         font_reset = QPushButton("Reset"); font_reset.clicked.connect(lambda: self._set_font_family("Figtree", reset=True))
         font_row.addWidget(font_file); font_row.addWidget(font_reset)
         appearance_layout.addLayout(font_row)
+        self.overview_logo_check = QCheckBox("Use the TMDB anime logo instead of the Overview title")
+        self.overview_logo_check.setChecked(self.cfg.data.overview_title_logo)
+        self.overview_logo_check.toggled.connect(self._set_overview_logo)
+        appearance_layout.addWidget(self.overview_logo_check)
         self.font_message = QLabel("Installed fonts or your own .ttf / .otf file"); self.font_message.setObjectName("subLabel")
         self.font_message.setWordWrap(True); appearance_layout.addWidget(self.font_message)
 
@@ -2945,6 +2996,21 @@ class MainWindow(QMainWindow):
         self.cfg.set(streaming_site=site, streaming_search_url=url)
         self.streaming_hint.setText(f"Anime clicks will open on {site}. Saved episodes on that site resume directly.")
 
+    def _set_overview_logo(self, enabled):
+        self.cfg.set(overview_title_logo=enabled)
+        self._refresh_overview_logo()
+
+    def _refresh_overview_logo(self):
+        if not hasattr(self, "anime_logo"):
+            return
+        payload = self._current_payload or {}
+        self.anime_logo.url = payload.get("title_logo") or ""
+        show = bool(self.cfg.data.overview_title_logo and self.anime_logo.url
+                    and not self.anime_logo.pixmap().isNull())
+        self.anime_logo.setVisible(show)
+        self.anime_title.setVisible(not show)
+        self.anime_logo.update()
+
     def _set_font_family(self, family, reset=False):
         self.cfg.set(font_family=family, **({"font_path": ""} if reset else {}))
         with QSignalBlocker(self.font_combo):
@@ -3073,10 +3139,18 @@ class MainWindow(QMainWindow):
             self.anilist_login_status.setText(result['message'])
             return
         token, account = result['token'], result['account']
+        sessions = dict(self.cfg.data.anilist_sessions)
+        if self.cfg.data.anilist_access_token and self.cfg.data.anilist_sync_account:
+            sessions[self.cfg.data.anilist_sync_account.casefold()] = self.cfg.data.anilist_access_token
+        sessions[account.casefold()] = token
         self.cfg.set(anilist_access_token=token, anilist_sync_account=account,
-                     anilist_last_sync=0, anilist_sync_enabled=True)
+                     anilist_last_sync=0, anilist_sync_enabled=True, anilist_sessions=sessions)
         self.controller.anilist.set_access_token(token)
         self.controller.add_anilist_account(account)
+        self._last_library_payload = None
+        self._last_calendar_payload = None
+        self._library_modern.pending_edits.clear()
+        self._on_library_loaded({"username": account, "sections": self.controller.watchlog.anilist_sections()})
         self._populate_anilist_accounts()
         self._load_toggles_from_config()
         self.anilist_login_status.setText(f"Connected as {account}.")
@@ -3088,13 +3162,16 @@ class MainWindow(QMainWindow):
             self._login_flow.cancel()
             self._login_flow = None
         self._login_generation += 1
+        sessions = dict(self.cfg.data.anilist_sessions)
+        sessions.pop(self.cfg.data.anilist_sync_account.casefold(), None)
         self.cfg.set(anilist_access_token="", anilist_sync_account="",
-                     anilist_last_sync=0, anilist_sync_enabled=False)
+                     anilist_last_sync=0, anilist_sync_enabled=False, anilist_sessions=sessions)
         self.controller.anilist.set_access_token("")
         self._load_toggles_from_config()
         self.anilist_login_btn.setText("Connect AniList")
         self.anilist_login_status.setText("Disconnected. Access can also be revoked in AniList settings.")
         self.controller._emit_sync_status(error="", activity="Disconnected")
+        self._populate_anilist_accounts()
 
     def _on_sync_status(self, status):
         last = status.get('last_success')
@@ -3279,6 +3356,33 @@ class MainWindow(QMainWindow):
         self._resume_stats_item(item)
 
     def _open_anime(self, entry):
+        if not entry:
+            return
+        from ..core.media_identity import MediaIdentity
+        entry = dict(entry)
+        recent = self.controller.watchlog.history(self.controller.recent.items(), copy_result=False)
+        resolver = MediaIdentity([entry, *recent])
+        if not entry.get("episode"):
+            local = next((row for row in recent if row.get("history_source") == "Local"
+                          and resolver.key(row) == resolver.key(entry)), None)
+            if local:
+                for field in ("episode", "url", "current_time"):
+                    if local.get(field) is not None:
+                        entry[field] = local[field]
+            elif entry.get("status") in ("CURRENT", "REPEATING") and entry.get("progress"):
+                episode = int(entry["progress"])+1
+                if not entry.get("episodes") or episode <= entry["episodes"]:
+                    entry["episode"] = episode
+        if self.stack.currentWidget() is not self._details:
+            self._details.history.clear()
+            self._details.entry = {}
+        self._tab_anim_stop()
+        self.stack.setCurrentWidget(self._details)
+        self._page_heading.hide()
+        self._details.open(entry)
+        self._scrolling.install()
+
+    def _watch_anime(self, entry):
         from ..core.streaming import anime_url
         if entry:
             webbrowser.open(anime_url(entry, self.cfg.data.streaming_site, self.cfg.data.streaming_search_url))
@@ -3676,7 +3780,7 @@ class MainWindow(QMainWindow):
 
         axis_x = QBarCategoryAxis()
         axis_x.append([d[5:] if self.width() >= 1200 else d[-2:] for d, _ in data])
-        axis_color = QColor("#657086" if self._applied_theme == "light" else "#a4aec3")
+        axis_color = QColor("#657086" if self._applied_theme == "light" else "#aaaaaa")
         axis_x.setLabelsColor(axis_color)
         axis_x.setLabelsAngle(0)
         axis_x.setGridLineVisible(False)
@@ -3689,7 +3793,7 @@ class MainWindow(QMainWindow):
         axis_y.setTickCount(4)
         axis_y.applyNiceNumbers()
         axis_y.setLabelsColor(axis_color)
-        axis_y.setGridLineColor(QColor("#d6dce9" if self._applied_theme == "light" else "#30364b"))
+        axis_y.setGridLineColor(QColor("#d6dce9" if self._applied_theme == "light" else "#363636"))
         chart.addAxis(axis_y, Qt.AlignLeft)
         series.attachAxis(axis_y)
 
@@ -3699,6 +3803,7 @@ class MainWindow(QMainWindow):
         previous_chart.deleteLater()
 
     def _on_tab_changed(self, index):
+        self._page_heading.setVisible(self.cfg.data.ui_layout == "modern")
         self._tab_anim_stop()
         snapshot = self.isVisible() and self.cfg.data.smooth_animations and self.stack.currentIndex() != index
         self.stack.setCurrentIndex(index)
@@ -3904,8 +4009,8 @@ class MainWindow(QMainWindow):
         family = self.cfg.data.font_family
         if family not in QFontDatabase.families(): family = "Figtree"
         family = family.replace("\\", "\\\\").replace('"', '\\"')
-        from .modern import oled_qss
-        QApplication.instance().setStyleSheet(
+        from .modern import oled_qss, neutral_surfaces
+        QApplication.instance().setStyleSheet(neutral_surfaces(
             build_theme_qss(
                 self._applied_theme,
                 self.cfg.data.accent,
@@ -3917,7 +4022,8 @@ class MainWindow(QMainWindow):
             + (revamp_qss(self._applied_theme,self.cfg.data.accent,self.cfg.data.glass_effects)
                if self.cfg.data.ui_layout == "modern" else "")
             + (oled_qss() if self._applied_theme == "oled" else "")
-            + f'\nQWidget {{ font-family: "{family}"; }}'
+            + f'\nQWidget {{ font-family: "{family}"; }}',
+            self._applied_theme, self.cfg.data.accent)
         )
         self._page_heading.accent = self.cfg.data.accent
         self._page_heading.light = self._applied_theme == "light"
@@ -4066,6 +4172,9 @@ class MainWindow(QMainWindow):
 
     def _do_rebuild(self):
         current_tab = self.tabbar.currentIndex()
+        detail_entry = dict(self._details.entry) if self.stack.currentWidget() is self._details else None
+        detail_history = list(self._details.history)
+        self._details.generation += 1
         log_text = self.log_view.toPlainText()
         login_status = self.anilist_login_status.text()
         draft_fields = {name: getattr(self, name).text() for name in (
@@ -4112,6 +4221,9 @@ class MainWindow(QMainWindow):
         self._update_preview()
         if self.tabbar.currentIndex() == self._stats_tab_index:
             self._refresh_stats()
+        if detail_entry:
+            self._open_anime(detail_entry)
+            self._details.history = detail_history
 
     def _on_rpc_toggled(self, on):
         self.cfg.set(rpc_enabled=on)
@@ -4151,8 +4263,8 @@ class MainWindow(QMainWindow):
             self._on_recent(self.controller.recent.items())
         if hasattr(self,"_sidebar_account"):
             connected=bool(self.cfg.data.anilist_access_token and self.cfg.data.anilist_sync_account==active)
-            self._sidebar_account.setText(f"{active or 'Default profile'}\nAniList · {'Connected' if connected else 'Public' if active else 'Add account'}")
-            self._sidebar_account.setToolTip(f"{active or 'Default profile'} · Account settings")
+            self._sidebar_account.setText(f"{active or 'Default profile'}\nAniList · {'Connected' if connected else 'Public' if active else 'Add account'}" if self.width() >= 900 else "")
+            self._sidebar_account.setToolTip(f"{active or 'Default profile'} · Switch or connect accounts")
 
     def _load_account_avatar(self):
         """Request the avatar for the currently active account (monogram while
@@ -4232,6 +4344,7 @@ class MainWindow(QMainWindow):
             self._calendar_list.clear()
             self._refresh_stats()
         self._populate_anilist_accounts()
+        self._load_toggles_from_config()
         self._analytics.sync_button.setEnabled(True)
         self._analytics.sync_button.setText("Refresh AniList")
         self._analytics.sync_message = ""
@@ -4337,6 +4450,7 @@ class MainWindow(QMainWindow):
             self._hide_match_chooser()
         title = payload.get("title") or "Unknown title"
         self.anime_title.setText(title)
+        self._refresh_overview_logo()
 
         parts = []
         if payload.get("episode"):
@@ -4561,7 +4675,7 @@ class MainWindow(QMainWindow):
         ambient = self._ambient
         if ambient is None:
             return
-        if not self.cfg.data.cinematic_backdrop or self._applied_theme == "oled":
+        if not self.cfg.data.cinematic_backdrop or self._applied_theme != "light":
             ambient.hide()
             return
         source = self._cover_pixmap
@@ -5591,6 +5705,7 @@ class MainWindow(QMainWindow):
         self._current_payload = None
         self._load_banner("")
         self.anime_title.setText("No anime detected")
+        self._refresh_overview_logo()
         self.episode_label.setText("WATCHING A VIDEO IS ALL IT TAKES")
         self.match_label.setText("")
         self.progress.setValue(0)

@@ -28,7 +28,7 @@ class ArtworkService:
         self.closed = False
         try:
             saved = json.loads((self.directory / "tmdb.json").read_text(encoding="utf-8"))
-            if isinstance(saved, dict) and saved.get("version") == 2:
+            if isinstance(saved, dict) and saved.get("version") == 3:
                 self.cache = saved.get("entries") or {}
                 self.api_cache = saved.get("responses") or {}
         except (OSError, ValueError):
@@ -86,11 +86,14 @@ class ArtworkService:
                     if "cover_url" in result:
                         result["cover_url"] = poster
                         result["cover_extra_url"] = poster
-                for field in ("episode_art", "backdrop"):
+                for field in ("episode_art", "backdrop", "title_logo"):
                     if data.get(field) and self.image_path(data[field]).exists():
                         result[field] = data[field]
                 if not result.get("episode_title") and data.get("episode_title"):
                     result["episode_title"] = data["episode_title"]
+                for field in ("episode_description", "episode_air_date"):
+                    if data.get(field):
+                        result[field] = data[field]
                 if data.get("title_english") and not entry.get("title_english"):
                     result["title"] = data["title_english"]
             if request and (detail is None or show is None) and priority < self.pending.get(key, 9999):
@@ -105,7 +108,7 @@ class ArtworkService:
         return result
 
     def _download(self, client, data):
-        for field in ("poster", "backdrop", "episode_art"):
+        for field in ("poster", "backdrop", "episode_art", "title_logo"):
             url = data.get(field)
             if not url:
                 continue
@@ -139,6 +142,11 @@ class ArtworkService:
                     show = self._cached(show_key)
                 if show is None:
                     show = client.match(entry)
+                    if show:
+                        try:
+                            show["title_logo"] = client.logo(show)
+                        except Exception:
+                            pass  # A missing logo must not discard a confident match.
                     self._download(client, show)
                     self._store(show_key, show, generation)
                 value = client.episode(show, ep) if ep and show else (show or {})
@@ -164,7 +172,7 @@ class ArtworkService:
             self.cache[key] = {"at": time.time(), "value": value}
             if time.time()-self._saved_at < 2 and len(self.pending) > 1:
                 return
-            snapshot = {"version": 2, "entries": dict(self.cache), "responses": dict(self.api_cache)}
+            snapshot = {"version": 3, "entries": dict(self.cache), "responses": dict(self.api_cache)}
         # Serialization and disk I/O must not hold the lock used by visible rows.
         try:
             self.directory.mkdir(parents=True, exist_ok=True)

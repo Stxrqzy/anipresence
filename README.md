@@ -15,6 +15,28 @@ from the page title.
 
 ### Version 3.0 interface
 
+Version 3.0.8 adds **in-app anime details**. Open an anime from Browse, Library,
+History, Statistics or Continue Watching to see its backdrop, poster, synopsis,
+metadata, episode cards and related anime. Back returns to your previous page.
+**Watch / Continue** explicitly opens the streaming destination chosen in Settings.
+Episode cards load in groups of 12, including for long-running series.
+
+With a TMDB credential configured under **Settings → Artwork & metadata**, title
+logos and episode images/descriptions are downloaded and cached. English logos
+are preferred, then language-neutral/Japanese logos; missing logos fall back to
+the anime title. **Settings → Appearance & fonts → Use the TMDB anime logo**
+also enables logos on Overview. AniList provides the synopsis and related titles.
+
+The sidebar account button now opens a small account flyout. Switch saved
+profiles, see which are connected, or **Add / connect account** using browser
+login. Each connected account retains its own token, and switching to a public
+profile clears the active authentication slot. Disconnect only removes the
+selected login. The account button remains available in the narrow sidebar.
+
+Dark and OLED now use neutral surfaces, borders and text without the old violet
+glass glow or full-window artwork tint. Accent controls, branding and the
+intentional banner artwork retain their colors.
+
 Version 3.0.7 adds **Browse** between Overview and History: a responsive poster
 catalogue with AniList search, trending/popular/rating sorting, genre, tag,
 studio, year, season, format, release status, origin and minimum-score filters.
@@ -23,7 +45,7 @@ share the authenticated Library status menu. AniList does not provide dubbed
 audio availability; Origin filters the anime's country of production.
 
 **Settings → Streaming destination** chooses ani.pm (default), Crunchyroll,
-Netflix, or a custom HTTP(S) search URL containing `{query}`. Anime entries open
+Netflix, or a custom HTTP(S) search URL containing `{query}`. Watch actions open
 a title search there; a saved episode on the selected domain resumes directly.
 History merges matching local/feed episodes, retaining local timing and URLs.
 The all-time unique-episode metric includes Watching/Completed list progress
@@ -427,7 +449,7 @@ set the correct title/episode. The fix is remembered per page, so the same URL
 detects correctly next time.
 
 **Recently watched** stays across restarts (`%APPDATA%\AniPresence\recent.json`).
-Double-click an entry to open it on your selected streaming site, or right-click
+Double-click an entry to view its details, then select Watch, or right-click
 for "Open as PWA". Playback time is accumulated per title — open **Statistics** to see your
 totals. Covers are cached in `%APPDATA%\AniPresence\covers\`.
 
@@ -551,6 +573,7 @@ defaults). All keys:
 | `artwork_theme` | `"Midnight Violet"` | Named preset scenery for the header and sidebar |
 | `font_family` | `"Figtree"` | Interface font family |
 | `font_path` | `""` | Imported font saved in the app-data fonts folder |
+| `overview_title_logo` | `false` | Show a cached TMDB title logo on Overview, with text fallback |
 | `streaming_site` | `"ani.pm"` | Destination for anime entries: `ani.pm`, `Crunchyroll`, `Netflix`, or `Custom` |
 | `streaming_search_url` | `""` | Custom HTTP(S) search URL containing `{query}` |
 | `ui_layout` | `"modern"` | Interface layout: `modern` sidebar or `classic` tabs; switch live in Settings → Appearance |

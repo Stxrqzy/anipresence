@@ -112,7 +112,7 @@ class PosterDelegate(QStyledItemDelegate):
         light = window._applied_theme == "light"
         accent = QColor(window.cfg.data.accent)
         p = painter; p.save(); p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(Qt.NoPen); p.setBrush(QColor("#ded8eb" if light else "#211b32")); p.drawRoundedRect(area, 20, 20)
+        p.setPen(Qt.NoPen); p.setBrush(QColor("#ded8eb" if light else "#202020")); p.drawRoundedRect(area, 20, 20)
         if not pixmap.isNull():
             draw_filled_pixmap(p, area, pixmap, 20)
         clip = QPainterPath(); clip.addRoundedRect(area, 20, 20)
@@ -168,7 +168,7 @@ class PosterDelegate(QStyledItemDelegate):
             p.setPen(QPen(accent.lighter(125),2));p.setBrush(Qt.NoBrush);p.drawRoundedRect(area,20,20)
         progress = entry.get("progress") or 0
         if status and status != "Planning":
-            p.setPen(QColor("#71657e" if light else "#aea6b8"))
+            p.setPen(QColor("#71657e" if light else "#aeaeae"))
             text = f"{progress:,}/{count:,} watched" if count else f"{progress:,} watched"
             p.drawText(QRectF(area.left()+2,area.bottom()+7,area.width()-4,22),Qt.AlignLeft|Qt.AlignVCenter,text)
         p.restore()

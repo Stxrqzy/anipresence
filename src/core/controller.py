@@ -1058,7 +1058,14 @@ class Controller:
         if username and username not in self._accounts:
             self._accounts.append(username)
         self._active_account = username
-        self.cfg.set(anilist_username=username, anilist_accounts=self._accounts)
+        sessions = dict(self.cfg.data.anilist_sessions)
+        if self.cfg.data.anilist_access_token and self.cfg.data.anilist_sync_account:
+            sessions[self.cfg.data.anilist_sync_account.casefold()] = self.cfg.data.anilist_access_token
+        token = sessions.get(username.casefold(), "")
+        self.cfg.set(anilist_username=username, anilist_accounts=self._accounts,
+                     anilist_sessions=sessions, anilist_access_token=token,
+                     anilist_sync_account=username if token else "", anilist_last_sync=0)
+        self.anilist.set_access_token(token)
         if username:
             legacy = watchlog_path_for("", APP_DIR)
             target = watchlog_path_for(username, APP_DIR)
@@ -1081,7 +1088,13 @@ class Controller:
         if not username or username not in self._accounts:
             return
         self._accounts.remove(username)
-        self.cfg.set(anilist_accounts=self._accounts)
+        sessions = dict(self.cfg.data.anilist_sessions)
+        sessions.pop(username.casefold(), None)
+        changes = {"anilist_sessions": sessions, "anilist_accounts": self._accounts}
+        if self.cfg.data.anilist_sync_account.casefold() == username.casefold():
+            changes.update(anilist_access_token="", anilist_sync_account="")
+            self.anilist.set_access_token("")
+        self.cfg.set(**changes)
         if self._active_account == username:
             self.switch_anilist_account("")
 
@@ -1203,7 +1216,10 @@ class Controller:
                 {"account": label, "titles": len(records), "message": ""}
             )
             if token:
-                self.cfg.set(anilist_sync_account=viewer_name, anilist_last_sync=time.time())
+                sessions = dict(self.cfg.data.anilist_sessions)
+                sessions[viewer_name.casefold()] = token
+                self.cfg.set(anilist_sync_account=viewer_name, anilist_last_sync=time.time(),
+                             anilist_sessions=sessions)
             self._emit_sync_status(error="", activity=f"Imported {len(records)} titles from {label}")
 
         def _run():
