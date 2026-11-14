@@ -24,6 +24,7 @@ def make_window(tmp_path, monkeypatch):
         monkeypatch.setattr(MainWindow, method, lambda *args: None)
     for method in ("refresh_library", "refresh_calendar", "fetch_account_avatar", "refresh_activity_stats"):
         monkeypatch.setattr(Controller, method, lambda *args, **kwargs: None)
+    monkeypatch.setattr("src.ui.browse.catalogue", lambda *args: {"entries": [], "hasNextPage": False})
     windows = []
 
     def create(**settings):
@@ -57,6 +58,68 @@ def test_cached_avatar_arrives_during_startup(make_window, monkeypatch, tmp_path
     assert window._account_avatar_url == url
     assert not window._sidebar_account.icon().isNull()
     assert window.account_avatar.pixmap().toImage().pixelColor(17, 17).name() == "#ca37ee"
+
+
+def test_browse_stale_responses_badge_and_confirmed_addition(make_window, monkeypatch):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    app, window = make_window(anilist_accounts=["Alice"], anilist_username="Alice", smooth_animations=False)
+    panel = window._browse
+    assert window._page_names[:3] == ["Overview", "Browse", "History"]
+    panel.started = True
+    entry = {"anilist_id": 42, "title": "Example", "episodes": 12}
+    panel.receive(panel.generation, 1, {"entries": [entry], "hasNextPage": True, "total": 2})
+    assert panel.grid.count() == 1
+    old = panel.generation
+    panel.search.setText("Other"); panel.timer.stop()
+    panel.receive(old, 2, {"entries": [{"anilist_id": 99, "title": "Stale"}]})
+    assert panel.grid.count() == 1
+    window.show(); window.tabbar.setCurrentIndex(window._browse_tab_index); app.processEvents()
+    opened = []
+    monkeypatch.setattr("src.ui.app.webbrowser.open", opened.append)
+    QTest.mouseClick(panel.grid.viewport(), Qt.LeftButton,
+                     pos=panel.grid.badge_rect(panel.grid.item(0)).center().toPoint())
+    assert not opened
+    menu = window._library_modern._status_menu
+    assert not any(action.isChecked() for action in menu.actions())
+    menu.close()
+    window._on_library_changed({"account": "Alice", "media_id": 42, "entry": entry, "status": "PLANNING",
+                                "result": {"status": "PLANNING", "progress": 0}})
+    assert panel.grid.item(0).data(Qt.UserRole)["status"] == "PLANNING"
+    assert window._library_modern.entries[0]["anilist_id"] == 42
+
+
+def test_oled_custom_font_theme_art_and_settings_cleanup(make_window, monkeypatch, tmp_path):
+    import base64
+    from src.fonts import _FIGTREE_B64
+    from PySide6.QtCore import QSize
+    from PySide6.QtGui import QPixmap, QFont, QFontDatabase
+    from src.ui.v3_widgets import illustrated_surface
+    from src.ui.app import ACCENT_PRESETS
+    app, window = make_window(theme="oled", smooth_animations=False)
+    window.show(); app.processEvents()
+    assert window._applied_theme == "oled"
+    assert window.centralWidget().grab().toImage().pixelColor(0, 0).name() == "#000000"
+    assert window._ambient.isHidden()
+    assert not hasattr(window, "watch_any_btn")
+    assert not hasattr(window, "launch_chrome_btn")
+    assert not hasattr(window, "pwa_url_edit")
+    images = [illustrated_surface(QSize(500, 112), 1, name, accent, "dark", QPixmap()).toImage()
+              for name, accent in ACCENT_PRESETS]
+    assert all(images[i] != images[j] for i in range(len(images)) for j in range(i))
+    source = tmp_path / "custom.ttf"; source.write_bytes(base64.b64decode(_FIGTREE_B64))
+    monkeypatch.setattr("PySide6.QtWidgets.QFileDialog.getOpenFileName", lambda *a: (str(source), ""))
+    window._import_font()
+    saved = ConfigManager(window.cfg.path).data
+    assert saved.font_family == "Figtree" and saved.font_path
+    family = QFontDatabase.families()[0]
+    window.font_combo.setCurrentFont(QFont(family))
+    assert window.cfg.data.font_family == family
+    assert f'font-family: "{family}"' in app.styleSheet()
+    window._set_font_family("Missing font family")
+    assert 'font-family: "Figtree"' in app.styleSheet()
+    window._show_update_settings()
+    assert window._updates_section.toggle.isChecked()
 
 
 def test_library_filters_sorting_account_reset_and_layout_switch(make_window):
@@ -284,7 +347,7 @@ def test_sidebar_avatar_switch_rejects_stale_metadata_and_image(make_window, mon
 def test_continue_cards_use_local_progress_and_keep_activation_current(make_window, monkeypatch):
     from PySide6.QtCore import Qt
     from PySide6.QtTest import QTest
-    app, window = make_window(smooth_animations=False)
+    app, window = make_window(smooth_animations=False, streaming_site="Custom", streaming_search_url="https://watch/search?q={query}")
     ctrl = window.controller
     ctrl.watchlog.add("Example", 2, "Browser", "https://watch/2", "", 300, media_id=42)
     ctrl.recent.add({"title": "Example", "anilist_id": 42, "episode": 2,
@@ -309,7 +372,7 @@ def test_continue_cards_use_local_progress_and_keep_activation_current(make_wind
     # Progress from episode 2 must not carry over to episode 3.
     assert not card.entry.get("duration")
     panel.view_all.emit()
-    assert window.stack.currentIndex() == 1
+    assert window.stack.currentIndex() == window._history_tab_index
 
 
 def test_history_renders_episode_names_and_numeric_runs(make_window):
@@ -348,7 +411,7 @@ def test_transitions_cancel_cleanly_and_progress_finishes_on_disable(make_window
     app, window = make_window()
     window.show()
     app.processEvents()
-    window.tabbar.setCurrentIndex(1)
+    window.tabbar.setCurrentIndex(window._history_tab_index)
     first = window._tab_overlay
     assert first is not None
     window.tabbar.setCurrentIndex(window._settings_tab_index)
@@ -367,7 +430,7 @@ def test_transitions_cancel_cleanly_and_progress_finishes_on_disable(make_window
     window.animations_check.setChecked(False)
     assert window.progress.value() == 130
     assert window._progress_animation.state() == QAbstractAnimation.Stopped
-    window.tabbar.setCurrentIndex(1)
+    window.tabbar.setCurrentIndex(window._history_tab_index)
     assert window._tab_overlay is None
     window.animations_check.setChecked(True)
     window.tabbar.setCurrentIndex(0)
@@ -400,11 +463,11 @@ def test_anime_selection_has_no_focus_box_and_keeps_keyboard_activation(make_win
     from PySide6.QtCore import Qt
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
-    app, window = make_window(smooth_animations=False)
+    app, window = make_window(smooth_animations=False, streaming_site="Custom", streaming_search_url="https://example.com/search?q={query}")
     window._on_recent([{"title": "First", "url": "https://example.com/1"},
                        {"title": "Second", "url": "https://example.com/2"}])
     window.show()
-    window.tabbar.setCurrentIndex(1)
+    window.tabbar.setCurrentIndex(window._history_tab_index)
     app.processEvents()
     view = window.recent_list
     view.setCurrentRow(0)

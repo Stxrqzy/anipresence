@@ -8,6 +8,10 @@ def normalized_title(title):
     return " ".join(unicodedata.normalize("NFKC", str(title or "")).casefold().split())
 
 
+def title_signature(title):
+    return " ".join(re.sub(r"[^\w\s]", " ", normalized_title(title)).split())
+
+
 def media_id(entry):
     value = entry.get("media_id") or entry.get("anilist_id")
     if not value:
@@ -28,6 +32,7 @@ class MediaIdentity:
         self.display = {}
         self.english = {}
         self.title_names = {}
+        self.signatures = defaultdict(set)
         for entry in entries:
             name = normalized_title(entry.get("title"))
             if name:
@@ -37,6 +42,7 @@ class MediaIdentity:
                 for title in [entry.get("title"), entry.get("title_english"), *(entry.get("aliases") or [])]:
                     if normalized_title(title):
                         self.names[normalized_title(title)].add(identity)
+                        self.signatures[title_signature(title)].add(identity)
                 if entry.get("title"):
                     self.display[identity] = " ".join(entry["title"].split())
                 if entry.get("title_english"):
@@ -45,7 +51,7 @@ class MediaIdentity:
     def key(self, entry):
         identity = media_id(entry)
         name = normalized_title(entry.get("title"))
-        matches = self.names.get(name, set())
+        matches = self.names.get(name) or self.signatures.get(title_signature(name), set())
         if identity or len(matches) == 1:
             return ("anilist", identity or next(iter(matches)))
         return ("title", name)

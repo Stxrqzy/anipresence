@@ -8,6 +8,7 @@ def navigation_icon(index, color):
     from PySide6.QtSvg import QSvgRenderer
     paths = [
         '<path d="M3 10 12 3l9 7v11h-6v-7H9v7H3z"/>',
+        '<circle cx="10" cy="10" r="7"/><path d="m15 15 6 6M7 10h6m-3-3v6"/>',
         '<path d="M3 4v6h6M3 10a9 9 0 1 1 0 5M12 7v5l3 2"/>',
         '<rect x="3" y="4" width="7" height="17" rx="1"/><path d="m14 4 5-1 4 17-5 1zM5 8h3M5 17h3"/>',
         '<path d="M4 20V12h4v8m2 0V7h4v13m2 0V3h4v17M2 21h20"/>',
@@ -54,6 +55,22 @@ def modern_qss(theme, accent):
     QWidget#modernRoot QProgressBar {{ background: {hover}; border: 0; border-radius: 3px; min-height: 6px; max-height: 6px; }}
     QWidget#modernRoot QProgressBar::chunk {{ background: {accent}; border-radius: 3px; }}
     QWidget#modernRoot QLineEdit, QWidget#modernRoot QComboBox, QWidget#modernRoot QSpinBox {{ border: 1px solid {border}; border-radius: 8px; padding: 8px; }}
+    """
+
+
+def oled_qss():
+    return """
+    QWidget, QMainWindow, QWidget#modernRoot, QWidget#classicRoot { background-color: #000000; color: #f5f5f5; }
+    QWidget#modernRoot QFrame#sidebar, QWidget#modernRoot QFrame#card,
+    QWidget#modernRoot QFrame#controls, QWidget#modernRoot QFrame#preview,
+    QWidget#classicRoot QFrame#card, QWidget#classicRoot QFrame#controls,
+    QWidget#modernRoot QFrame#continueStrip { background: #000000; border: 1px solid #303036; }
+    QWidget#modernRoot QWidget#surfaceContent, QWidget#modernRoot QLabel,
+    QWidget#classicRoot QWidget#surfaceContent, QWidget#classicRoot QLabel { background: transparent; }
+    QWidget#modernRoot QLineEdit, QWidget#modernRoot QComboBox, QWidget#modernRoot QSpinBox,
+    QWidget#modernRoot QListWidget#animeList, QWidget#modernRoot QTableWidget,
+    QWidget#classicRoot QListWidget#animeList { background: #080808; }
+    QWidget#modernRoot QComboBox QAbstractItemView { background: #101010; color: #f5f5f5; }
     """
 
 

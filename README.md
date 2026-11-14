@@ -15,6 +15,32 @@ from the page title.
 
 ### Version 3.0 interface
 
+Version 3.0.7 adds **Browse** between Overview and History: a responsive poster
+catalogue with AniList search, trending/popular/rating sorting, genre, tag,
+studio, year, season, format, release status, origin and minimum-score filters.
+Results load in pages, with retry and stale-search protection. Poster badges
+share the authenticated Library status menu. AniList does not provide dubbed
+audio availability; Origin filters the anime's country of production.
+
+**Settings → Streaming destination** chooses ani.pm (default), Crunchyroll,
+Netflix, or a custom HTTP(S) search URL containing `{query}`. Anime entries open
+a title search there; a saved episode on the selected domain resumes directly.
+History merges matching local/feed episodes, retaining local timing and URLs.
+The all-time unique-episode metric includes Watching/Completed list progress
+without counting matching playback/feed episodes twice. Date ranges use dated
+events only.
+
+**OLED** adds true-black app surfaces. Named accent presets have distinct
+illustrated header/sidebar scenery; Midnight Violet keeps its original landscape.
+During playback, both banners use the anime's artwork. Status badges use new
+rounded-line icons on translucent frosted backgrounds. Statistics has a taller
+activity graph and a multi-row title list.
+
+Settings is organised into collapsible sections. **Appearance & fonts** supports
+installed fonts and imported `.ttf`/`.otf` files, copied into the app-data folder
+so they survive upgrades. The arbitrary-site PWA section, Watch anything, and
+manual Launch Chrome button have been removed.
+
 Version 3.0.6 improves **navigation and scrolling** with cached poster cards and
 background image decoding, cached History/Statistics data, and lightweight tab
 feedback instead of full-page snapshot animations. Artwork arrivals repaint
@@ -107,8 +133,9 @@ with episode progress and scores, and reorganized Settings cards.
   overlapping ranges are deduplicated. Legacy logs without episode IDs use a
   conservative same-title/day overlap deduction. Reconciled list totals contribute
   to All time without being added again; undated completion/planning events never
-  invent daily playback. Episode counts cover unique recorded/feed episodes, not
-  rewatches or complete lifetime history. **View all titles** opens detailed lists.
+  invent daily playback. All-time episode counts include Watching/Completed list
+  progress plus unique recorded episodes beyond it. Rewatches are not counted
+  twice. **View all titles** opens detailed lists.
 - **Activity log:** persistent local events, text/type/date filters, event details,
   pagination and CSV export. Clear removes the saved activity journal too.
 - **Classic** remains available through Settings → Appearance.
@@ -153,9 +180,9 @@ with episode progress and scores, and reorganized Settings cards.
 - **Modern or Classic** — the new default layout has sidebar navigation, a
   focused Now Playing card and streamlined actions. Switch instantly under
   **Settings → Appearance → Use modern interface**; turn it off for the original
-  tabbed layout. Both layouts support dark/light themes and AniList browser login.
+  tabbed layout. Both layouts support dark/light/OLED themes and AniList browser login.
 - **Glass & motion** — translucent panels, soft accent lighting and fine edge
-  highlights in both layouts. Navigation uses a short snapshot transition, and
+  highlights in both layouts. Navigation uses a lightweight accent-line transition, and
   playback progress eases between updates. Both effects can be disabled in
   **Settings → Appearance**.
 - **Refined lists & statistics** — consistent page margins, responsive summary
@@ -165,8 +192,6 @@ with episode progress and scores, and reorganized Settings cards.
   selected title and scroll position.
 - **New app identity** — a cyan/violet A-and-play symbol with a presence dot,
   shared by the app, tray, splash screen and Windows installer.
-- **Watch anything** — force a presence for anything AniPresence can't detect
-  (non-anime sites, movies, games) with a title/episode/website dialog.
 - **Continue watching** — a *Next episode* button opens the next episode of the
   current show, and *Copy URL* grabs the page link.
 - **Watch stats** — playback time is tracked per title and shown in a stats
@@ -402,8 +427,8 @@ set the correct title/episode. The fix is remembered per page, so the same URL
 detects correctly next time.
 
 **Recently watched** stays across restarts (`%APPDATA%\AniPresence\recent.json`).
-Double-click an entry to reopen it, or right-click for "Open as PWA". Playback
-time is accumulated per title — open **Watch stats** in the controls to see your
+Double-click an entry to open it on your selected streaming site, or right-click
+for "Open as PWA". Playback time is accumulated per title — open **Statistics** to see your
 totals. Covers are cached in `%APPDATA%\AniPresence\covers\`.
 
 **Privacy mode** strips URLs out of the on-screen log (and recent tooltips).
@@ -411,7 +436,7 @@ totals. Covers are cached in `%APPDATA%\AniPresence\covers\`.
 **Interface layout**: **Settings → Appearance → Use modern interface** switches
 between Modern (default) and Classic without restarting. Playback, the current
 page, unsaved fields, and active login/download operations stay intact. Modern
-moves the general controls, account selector and PWA launcher into Settings;
+moves the general controls and account selector into Settings;
 extra Now Playing actions are under **More actions**. The sidebar becomes an
 icon rail on narrow windows; hover an icon for its page name.
 
@@ -419,15 +444,15 @@ icon rail on narrow windows; hover an icon for its page name.
 **Glass panels & soft accent lighting** and **Smooth page transitions & playback
 progress**. Glass works in both layouts and themes, even without Windows Mica or
 cover art. Cinematic mode adds the blurred cover behind the translucent panels.
-Animations use a captured frame so large settings pages and charts do not need
-to repaint every animation frame. Turning animations off applies immediately.
+Transitions animate a small accent line so large settings pages and charts do
+not need to repaint every frame. Turning animations off applies immediately.
 
 **Accent color & theme**: in Settings → Appearance (the header in Classic),
 pick a preset from the dropdown next to the theme
 selector, or choose **Custom color…** to open the picker (either pins the color
 and disables auto accent). With **Auto accent from cover art** enabled, the
 accent follows the current show's key art instead. The theme can be `Dark`,
-`Light` or `System` — `System` follows Windows' light/dark app mode and even
+`Light`, `OLED` or `System` — `System` follows Windows' light/dark app mode and even
 updates live while the app runs. "Compact layout" tightens spacing for smaller
 windows.
 
@@ -436,8 +461,8 @@ then starts minimized to the tray).
 
 **Backup config** copies `config.json` to your Desktop.
 
-**Launching a site as a PWA**: use the "Launch as PWA" button on the detected
-anime card, or the "OPEN A SITE AS PWA" URL field in the controls. Either way
+**Launching the detected anime as a PWA**: use the "Launch as PWA" button on the detected
+anime card (under More actions in Modern).
 the URL is opened in a standalone, tab-less app window of your configured
 browser (Chrome, Brave, Edge or Opera) and is detected by AniPresence like any
 other tab. If the browser is already running on the debug port the window is
@@ -522,7 +547,12 @@ defaults). All keys:
 | `detection_enabled` | `true` | Master switch for Chrome detection |
 | `hide_when_no_video` | `true` | Clear the presence when nothing is playing |
 | `min_match_score` | `60` | Fuzzy-match confidence floor (logging only) |
-| `theme` | `"dark"` | Interface theme: `dark`, `light`, or `system` (follows Windows light/dark) |
+| `theme` | `"dark"` | Interface theme: `dark`, `light`, `oled`, or `system` (follows Windows light/dark) |
+| `artwork_theme` | `"Midnight Violet"` | Named preset scenery for the header and sidebar |
+| `font_family` | `"Figtree"` | Interface font family |
+| `font_path` | `""` | Imported font saved in the app-data fonts folder |
+| `streaming_site` | `"ani.pm"` | Destination for anime entries: `ani.pm`, `Crunchyroll`, `Netflix`, or `Custom` |
+| `streaming_search_url` | `""` | Custom HTTP(S) search URL containing `{query}` |
 | `ui_layout` | `"modern"` | Interface layout: `modern` sidebar or `classic` tabs; switch live in Settings → Appearance |
 | `glass_effects` | `true` | Translucent glass panels and soft accent-colored background lighting |
 | `smooth_animations` | `true` | Short page transitions and smoothly updated playback progress |
@@ -544,7 +574,7 @@ Logs: `%APPDATA%\AniPresence\logs\anipresence.log`.
 
 ### Two-way AniList sync
 
-In Settings → Other Settings, use **Connect AniList** to approve access in your
+In Settings → AniList account & sync, use **Connect AniList** to approve access in your
 browser. AniPresence verifies the token's owner, selects that account, and enables
 sync. You can also paste an existing token into **AniList access token** and enable
 **Keep AniList in sync (two-way)**. Sync runs in both directions:
@@ -586,7 +616,7 @@ session. Progress belonging to another token is never retried under a new token.
 
 ### Presence controls and extension diagnostics
 
-Settings → Other Settings includes toggles for episode names, next-airing dates,
+Settings → Detection & Discord includes toggles for episode names, next-airing dates,
 cover art, and the Paused label. **Keep presence when video is paused** controls
 whether the whole activity stays visible. Paused playback never displays a moving
 timer, regardless of the label toggle.
@@ -601,7 +631,7 @@ browser. The panel also reports token mismatches and disconnected extensions.
 
 Update checks begin as soon as the app opens, run in the background, and repeat
 every six hours. When a newer stable version exists, a banner appears in the
-window; **View update** jumps directly to Settings → Other Settings → App updates.
+window; **View update** expands Settings → Updates.
 You can disable automatic checks there or re-enable them to check immediately.
 The update controls offer **Download installer**
 with progress followed by **Install update**. Install launches setup and quits the

@@ -18,6 +18,10 @@ class GlassBackground(QWidget):
 
     def paintEvent(self, event):
         super().paintEvent(event)
+        if self.theme == "oled":
+            painter = QPainter(self)
+            painter.fillRect(self.rect(), Qt.black)
+            return
         if not self.glass:
             return
         key = (self.size(), self.devicePixelRatioF(), self.theme, self.accent)

@@ -18,34 +18,33 @@ SECTIONS = {"CURRENT": "Watching", "REPEATING": "Watching", "PLANNING": "Plannin
 
 def draw_status(p, c, status):
     if status in ("Watching", "CURRENT"):
-        eye = QPainterPath(QPointF(c.x()-8,c.y()))
-        eye.quadTo(c.x(),c.y()-9,c.x()+8,c.y()); eye.quadTo(c.x(),c.y()+9,c.x()-8,c.y())
-        p.drawPath(eye); p.drawEllipse(c, 2.5,2.5)
+        path = QPainterPath(c+QPointF(-4,-7))
+        path.lineTo(c+QPointF(7,0)); path.lineTo(c+QPointF(-4,7)); path.closeSubpath()
+        p.drawPath(path)
     elif status == "REPEATING":
         p.drawArc(QRectF(c.x()-7,c.y()-7,14,14),30*16,270*16)
         p.drawLine(c+QPointF(7,-3),c+QPointF(7,-8));p.drawLine(c+QPointF(7,-3),c+QPointF(2,-3))
     elif status in ("Completed", "COMPLETED"):
-        p.drawEllipse(c,8,8)
-        path=QPainterPath(c+QPointF(-4,0));path.lineTo(c+QPointF(-1,3));path.lineTo(c+QPointF(5,-4));p.drawPath(path)
+        path=QPainterPath(c+QPointF(-6,0));path.lineTo(c+QPointF(-1,5));path.lineTo(c+QPointF(7,-5));p.drawPath(path)
     elif status in ("Paused", "PAUSED"):
-        p.drawEllipse(c,8,8)
-        for x in (-3,3):p.drawLine(c+QPointF(x,-4),c+QPointF(x,4))
+        for x in (-3,3):p.drawLine(c+QPointF(x,-6),c+QPointF(x,6))
     elif status == "REMOVE":
         p.drawRect(QRectF(c.x()-5,c.y()-4,10,11))
         p.drawLine(c+QPointF(-7,-6),c+QPointF(7,-6));p.drawLine(c+QPointF(-2,-8),c+QPointF(2,-8))
         for x in (-2,2):p.drawLine(c+QPointF(x,-1),c+QPointF(x,4))
     elif status in ("Dropped", "DROPPED"):
-        p.drawEllipse(c,8,8)
-        p.drawLine(c+QPointF(-3,-3),c+QPointF(3,3));p.drawLine(c+QPointF(3,-3),c+QPointF(-3,3))
-    else:
+        p.drawLine(c+QPointF(-5,-5),c+QPointF(5,5));p.drawLine(c+QPointF(5,-5),c+QPointF(-5,5))
+    elif status in ("Planning", "PLANNING"):
         bookmark=QPainterPath(c+QPointF(-5,-7));bookmark.lineTo(c+QPointF(5,-7))
         bookmark.lineTo(c+QPointF(5,7));bookmark.lineTo(c+QPointF(0,3));bookmark.lineTo(c+QPointF(-5,7));bookmark.closeSubpath();p.drawPath(bookmark)
+    else:
+        p.drawLine(c+QPointF(-6,0),c+QPointF(6,0)); p.drawLine(c+QPointF(0,-6),c+QPointF(0,6))
 
 
 def status_icon(status, light):
     pixmap = QPixmap(40,40);pixmap.fill(Qt.transparent);pixmap.setDevicePixelRatio(2)
     p=QPainter(pixmap);p.setRenderHint(QPainter.Antialiasing)
-    p.setPen(QPen(QColor("#dc586a" if status=="REMOVE" else "#5d536c" if light else "#c6c1ce"),1.6))
+    p.setPen(QPen(QColor("#dc586a" if status=="REMOVE" else "#5d536c" if light else "#c6c1ce"),1.7,Qt.SolidLine,Qt.RoundCap,Qt.RoundJoin))
     draw_status(p,QPointF(10,10),status);p.end()
     return QIcon(pixmap)
 
@@ -150,8 +149,17 @@ class PosterDelegate(QStyledItemDelegate):
         else:
             p.drawText(meta, Qt.AlignCenter, text)
         badge = QRectF(area.right()-46, area.top()+12, 34,34)
-        p.setBrush(QColor("#f4f7f5")); p.setPen(Qt.NoPen); p.drawEllipse(badge)
-        p.setPen(QPen(QColor("#17221d"), 1.8)); p.setBrush(Qt.NoBrush)
+        p.save()
+        frost_clip = QPainterPath(); frost_clip.addRoundedRect(badge, 12, 12)
+        p.setClipPath(frost_clip, Qt.IntersectClip)
+        if not pixmap.isNull():
+            blurred = pixmap.scaled(18, 28, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            draw_filled_pixmap(p, area, blurred, 20)
+        sheen = QLinearGradient(badge.topLeft(), badge.bottomRight())
+        sheen.setColorAt(0, QColor(255,255,255,215)); sheen.setColorAt(1, QColor(235,240,247,165))
+        p.fillRect(badge, sheen); p.restore()
+        p.setBrush(Qt.NoBrush); p.setPen(QPen(QColor(255,255,255,150),1)); p.drawRoundedRect(badge,12,12)
+        p.setPen(QPen(QColor("#20232d"), 1.8,Qt.SolidLine,Qt.RoundCap,Qt.RoundJoin)); p.setBrush(Qt.NoBrush)
         status = entry.get("library_section")
         draw_status(p,badge.center(),entry.get("status") or status)
         p.setClipping(False)
@@ -159,7 +167,7 @@ class PosterDelegate(QStyledItemDelegate):
         if option.state & (QStyle.State_Selected | QStyle.State_MouseOver):
             p.setPen(QPen(accent.lighter(125),2));p.setBrush(Qt.NoBrush);p.drawRoundedRect(area,20,20)
         progress = entry.get("progress") or 0
-        if status != "Planning":
+        if status and status != "Planning":
             p.setPen(QColor("#71657e" if light else "#aea6b8"))
             text = f"{progress:,}/{count:,} watched" if count else f"{progress:,} watched"
             p.drawText(QRectF(area.left()+2,area.bottom()+7,area.width()-4,22),Qt.AlignLeft|Qt.AlignVCenter,text)
@@ -213,7 +221,7 @@ class PosterGrid(QListWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        columns = max(1, min(6, self.viewport().width()//175))
+        columns = max(1, min(8, self.viewport().width()//175))
         # Leave room for Qt's icon-mode wrapping/scrollbar layout margins.
         width = max(140, (self.viewport().width()-24)//columns)
         self.setGridSize(QSize(width, int((width-14)*1.5)+38))
@@ -265,6 +273,7 @@ class LibraryPanel(QWidget):
         self.grid=PosterGrid();self.layout_root.addWidget(self.grid,1)
         self.grid.status_requested.connect(self.show_status_menu)
         self.grid.itemActivated.connect(lambda item:self.activated.emit(item.data(Qt.UserRole)))
+        self.grid.itemClicked.connect(lambda item:self.activated.emit(item.data(Qt.UserRole)))
         self.search.textChanged.connect(self.refresh)
         for control in (self.sort,self.genre,self.year,self.score,self.status):control.currentIndexChanged.connect(self.refresh)
         self.buttons["All"].setChecked(True)
@@ -274,7 +283,7 @@ class LibraryPanel(QWidget):
         window=self.window();account=window.controller.active_anilist_account
         light=window._applied_theme=="light"
         menu=StatusMenu(self.grid,light)
-        menu.setStyleSheet(f"QMenu {{background:{'#faf8fd' if light else '#19171e'};color:{'#302a39' if light else '#e5e1eb'};border:1px solid #635770;padding:8px;font-family:'Segoe UI';font-size:14px;}} "
+        menu.setStyleSheet(f"QMenu {{background:{'#faf8fd' if light else '#19171e'};color:{'#302a39' if light else '#e5e1eb'};border:1px solid #635770;padding:8px;font-size:14px;}} "
                           "QMenu::item {padding:12px 28px 12px 12px;} QMenu::item:selected {background:#6d38a1;color:white;} QMenu::separator {height:1px;background:#635770;margin:8px;}")
         current=entry.get("status") or next((s for s,section in SECTIONS.items() if section==entry.get("library_section")),"")
         def change(status):

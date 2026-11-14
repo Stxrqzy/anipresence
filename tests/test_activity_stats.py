@@ -139,3 +139,21 @@ def test_partial_feed_reports_progress_before_a_failure(monkeypatch):
     with pytest.raises(AniListError,match="offline"):
         client.fetch_user_activity("Alice",on_page=lambda snapshot,page:checkpoints.append(snapshot))
     assert checkpoints[0]["items"] and not checkpoints[0]["complete"]
+
+
+def test_unique_episode_total_includes_list_progress_without_inventing_dates(tmp_path):
+    log = WatchLog(tmp_path / "progress.json")
+    log.set_anilist_sections({
+        "Watching": [{"title": "Example", "anilist_id": 42, "progress": 5},
+                     {"title": "Example alias", "anilist_id": 42, "progress": 5}],
+        "Completed": [{"title": "Finished", "anilist_id": 99, "progress": 12}],
+        "Planning": [{"title": "Later", "anilist_id": 88, "progress": 10}],
+        "Dropped": [{"title": "Dropped", "anilist_id": 77, "progress": 20}],
+    })
+    log.set_activity({"items": [event(progress="1 - 6")]})
+    log.add("Example", 6, "site", "", "", 200, media_id=42)
+    log.add("Local only", 1, "site", "", "", 100, media_id=55)
+    result = log.analytics()
+    assert result["unique_episode_total"] == 19  # 5 + 12 + episode 6 + local-only 1
+    assert len(result["episodes"]) == 7
+    assert all(identity not in (99, 88, 77) for identity, _ in result["episodes"])

@@ -44,6 +44,12 @@ class Config:
     hide_when_no_video: bool = True
     min_match_score: float = 60.0
     theme: str = "dark"
+    artwork_theme: str = "Midnight Violet"
+    font_family: str = "Figtree"
+    font_path: str = ""
+    streaming_site: str = "ani.pm"
+    streaming_search_url: str = ""
+    navigation_version: int = 2
     ui_layout: str = "modern"       # "modern" | "classic"
     glass_effects: bool = True
     smooth_animations: bool = True
@@ -105,6 +111,16 @@ class ConfigManager:
             self.data.ui_layout = "modern"
         if self.data.cover_source not in ("tmdb", "anilist"):
             self.data.cover_source = "tmdb"
+        if raw.get("navigation_version", 1) < 2:
+            if self.data.current_tab >= 1:
+                self.data.current_tab += 1
+            self.data.navigation_version = 2
+        if "artwork_theme" not in raw:
+            self.data.artwork_theme = {
+                "#34d399": "Spring Bloom", "#fb923c": "Summer Sunset", "#f87171": "Autumn Ember",
+                "#38bdf8": "Winter Frost", "#f472b6": "Cherry Blossom", "#22d3ee": "Ocean Depths",
+                "#a3e635": "Forest Dew",
+            }.get(self.data.accent.lower(), "Midnight Violet")
         # Pre-wizard configs (no onboarding key) are treated as already done so
         # upgrading users never see the first-run wizard.
         if "onboarding_complete" not in raw:

@@ -146,3 +146,20 @@ def test_distinct_rewatch_events_remain_in_history_without_double_counting_stats
     assert len(log.analytics()["episodes"])==1
     log.dismiss_history(rows[1])
     assert len(log.history([]))==1
+
+
+def test_local_episode_merges_all_feed_occurrences_and_dismisses_them(tmp_path):
+    newer = snapshot(title="Frieren: Beyond Journey’s End", progress="2")["items"][0]
+    older = snapshot(title="Frieren: Beyond Journey’s End", progress="2", days_ago=400)["items"][0]
+    older["id"] = 2
+    local = [{"title": "Frieren Beyond Journey's End", "episode": "2.0", "last_watched": 100,
+              "url": "https://ani.pm/watch/2", "current_time": 350, "duration": 1400, "watch_seconds": 200}]
+    log = WatchLog(tmp_path / "merged.json")
+    log.set_activity({"items": [newer, older]})
+    rows = log.history(local)
+    assert len(rows) == 1
+    assert set(rows[0]["feed_activity_ids"]) == {1, 2}
+    assert rows[0]["url"] == local[0]["url"] and rows[0]["current_time"] == 350
+    assert rows[0]["last_watched"] == 100
+    log.dismiss_history(rows[0])
+    assert not WatchLog(log._path).history([])

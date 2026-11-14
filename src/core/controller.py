@@ -1316,7 +1316,7 @@ class Controller:
         account = self._active_account
         token = self.cfg.data.anilist_access_token.strip()
         log = self.watchlog
-        payload = {"account": account, "media_id": identity, "status": status}
+        payload = {"account": account, "media_id": identity, "status": status, "entry": dict(entry)}
         if not token or not account or not identity:
             self.bridge.library_changed.emit(dict(payload, error="Connect this AniList account in Settings to edit its library."))
             return

@@ -42,7 +42,7 @@ def feed_episodes(snapshot, newest_first=False, unique=True):
                    "last_watched": float(item["createdAt"]), "activity_id": item.get("id"),
                    "title": title.get("english") or title.get("romaji") or title.get("native") or str(media["id"]),
                    "title_english": title.get("english") or "",
-                   "aliases": [value for value in title.values() if value],
+                   "aliases": [*[value for value in title.values() if value], *(media.get("synonyms") or [])],
                    "season_year": media.get("seasonYear"),
                    "media_id": int(media["id"]), "episode": episode,
                    "genres": media.get("genres") or [], "url": media.get("siteUrl") or "",
@@ -100,8 +100,17 @@ def reconcile(titles, local_days, local_episodes, snapshot, references=()):
         dated = row["local_seconds"] + sum(row["estimated_days"].values())
         row["seconds"] = max(dated, (row.get("imported_seconds") or 0)+beyond_import)
         row["estimated_seconds"] = max(0, row["seconds"]-row["local_seconds"])
+    # List progress is an all-time baseline, never a fabricated dated event.
+    progress = {}
+    for entry in references:
+        if entry.get("status") in ("CURRENT", "REPEATING", "COMPLETED"):
+            identity = resolver.key(entry)[1]
+            progress[identity] = max(progress.get(identity, 0), max(0, int(entry.get("progress") or 0)))
+    unique_total = sum(progress.values()) + sum(
+        1 for identity, episode in episodes if episode > progress.get(identity, 0))
     return {"titles": sorted(rows.values(), key=lambda e: e["seconds"], reverse=True),
-            "days": combined_days, "episodes": episodes, "feed": snapshot}
+            "days": combined_days, "episodes": episodes, "feed": snapshot,
+            "unique_episode_total": unique_total}
 
 
 def streak(days):

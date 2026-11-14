@@ -162,7 +162,8 @@ class HistoryPanel(QWidget):
             e = dict(entry, cached_cover=str(self.cover_path(entry.get("cover") or "")))
             item = QListWidgetItem(e.get("title") or "Unknown")
             item.setData(Qt.UserRole + 1, e)
-            source = "AniList feed" if e.get("history_source") == "AniList feed" else history_status(e)
+            source = ("Local + AniList" if e.get("feed_activity_ids") else
+                      "AniList feed" if e.get("history_source") == "AniList feed" else history_status(e))
             name = (" · " + e["episode_title"]) if e.get("episode_title") else ""
             episode = e.get("activity_status") or f"Episode {e.get('episode') or '—'}{name}"
             item.setData(DETAIL_ROLE, f"{episode} · {source}" +
@@ -341,7 +342,6 @@ class AnalyticsPanel(QWidget):
     def __init__(self, controller, cover_path):
         super().__init__(); self.controller=controller; self.cover_path=cover_path
         layout=QVBoxLayout(self); layout.setContentsMargins(0,0,0,0); layout.setSpacing(16)
-        layout.addWidget(label("Your viewing, at a glance"))
         toolbar=QHBoxLayout(); toolbar.addStretch(1)
         self.period=combo(["All time","Last 7 days","Last 30 days","Last 90 days"]); toolbar.addWidget(self.period)
         self.sync_button = button("Refresh AniList", self.sync_anilist)
@@ -358,7 +358,7 @@ class AnalyticsPanel(QWidget):
             frame,body=card(title); chart=MetricChart(mode); body.addWidget(chart)
             self.frames.append(frame); setattr(self,mode,chart)
         top,body=card("Top anime · Most watched")
-        self.top=AnimeList(); self.top.setProperty("variant","ranking"); self.top.setMinimumHeight(235)
+        self.top=AnimeList(); self.top.setProperty("variant","ranking"); self.top.setMinimumHeight(420)
         self.top.itemActivated.connect(lambda item: self.window()._resume_stats_item(item))
         body.addWidget(self.top); self.frames.append(top)
         for i,frame in enumerate(self.frames):self.charts.addWidget(frame,i//2,i%2)
@@ -369,7 +369,8 @@ class AnalyticsPanel(QWidget):
         self.sync_timer = QTimer(self)
         self.sync_timer.setInterval(300000)
         self.sync_timer.timeout.connect(lambda: self.controller.refresh_activity_stats()
-                                       if self.window().isVisible() and self.window().stack.currentIndex() in (1, 3) else None)
+                                       if self.window().isVisible() and self.window().stack.currentIndex() in
+                                       (self.window()._history_tab_index, self.window()._stats_tab_index) else None)
         self.sync_timer.start()
 
     def sync_anilist(self):
@@ -394,9 +395,10 @@ class AnalyticsPanel(QWidget):
         total=sum(e.get("seconds",0) for e in titles)
         self.metrics["time"].setText(format_hours(total))
         self.metrics["anime"].setText(str(len(titles)))
-        self.metrics["episodes"].setText(str(sum(1 for day in snapshot["episodes"].values() if day >= cutoff)))
+        self.metrics["episodes"].setText(str(sum(1 for day in snapshot["episodes"].values() if day >= cutoff)
+                                              if days else snapshot["unique_episode_total"]))
         self.metrics["streak"].setText(f"{streak(snapshot['days'])}d")
-        self.metrics["episodes"].setToolTip("Unique episodes in recorded playback and the available AniList feed. Rewatches are not counted twice; list totals alone have no dated episode events.")
+        self.metrics["episodes"].setToolTip("All time includes progress from Watching and Completed anime, plus recorded episodes beyond that progress, without double counting. Date filters use only dated playback/feed events.")
         self.metrics["streak"].setToolTip("Current streak from measured playback and AniList list-update dates, independent of the selected range.")
         chart_days = {d:s for d,s in snapshot["days"].items() if d >= cutoff}
         weekly = [date.today()-timedelta(days=i) for i in range(6,-1,-1)]

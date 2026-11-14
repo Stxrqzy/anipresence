@@ -86,7 +86,7 @@ def test_layout_switch_keeps_live_widgets_and_async_operations(tmp_path, monkeyp
         window._login_flow = flow
         window._login_generation = 7
         window.anilist_secret_edit.setText('unsaved-secret')
-        window.pwa_url_edit.setText('https://example.com')
+        window.streaming_url.setText('https://example.com/search?q={query}')
         window.log_view.setPlainText('Previous activity')
         bridge.detection.emit({'title': 'Live anime', 'episode': 4, 'duration': 1000,
                                'current_time': 520, 'url': 'https://example.com/episode-4'})
@@ -104,7 +104,7 @@ def test_layout_switch_keeps_live_widgets_and_async_operations(tmp_path, monkeyp
             assert window.cover_label is cover and window.anilist_token_edit is token
             assert window._login_flow is flow and window._login_generation == 7
             assert window.anilist_secret_edit.text() == 'unsaved-secret'
-            assert window.pwa_url_edit.text() == 'https://example.com'
+            assert window.streaming_url.text() == 'https://example.com/search?q={query}'
             assert window.anime_title.text() == 'Live anime'
             assert window.progress.value() == 520
             assert window.log_view.toPlainText() == 'Previous activity'

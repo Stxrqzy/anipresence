@@ -27,4 +27,4 @@ def resolve_theme(theme):
     """Return 'dark' or 'light' for a stored theme ('' is treated as dark)."""
     if theme == "system":
         return "dark" if _system_theme_is_dark() else "light"
-    return "light" if theme == "light" else "dark"
+    return theme if theme in ("light", "oled") else "dark"

@@ -3,6 +3,7 @@ from .activity_stats import feed_episodes
 from .media_identity import MediaIdentity
 from datetime import datetime
 from itertools import groupby
+import math
 
 
 def sorted_history(entries, newest_first=True):
@@ -24,7 +25,9 @@ def history_key(entry, resolver):
     identity = resolver.key(entry)
     episode = entry.get("episode")
     try:
-        episode = int(episode) if episode is not None else None
+        number = float(episode) if episode is not None else None
+        if number is not None and math.isfinite(number):
+            episode = int(number) if number.is_integer() else number
     except (TypeError, ValueError):
         pass
     return (*identity, episode)
@@ -57,9 +60,19 @@ def combined_history(local, snapshot, references=(), cleared_before=0, dismissed
             for field in ("url", "website", "cover", "current_time", "duration", "episode_title"):
                 if not target.get(field) and entry.get(field):
                     target[field] = entry[field]
+    local_keys = set(entries)
     matched_feed = set()
     for event in feed:
         key = history_key(event, resolver)
+        if key in local_keys:
+            entry = entries[key]
+            entry.setdefault("anilist_id", event["media_id"])
+            entry["feed_activity_ids"] = list(dict.fromkeys(
+                [*(entry.get("feed_activity_ids") or []), event["activity_id"]]))
+            entry["feed_last_updated"] = max(entry.get("feed_last_updated", 0), event["last_watched"])
+            if not entry.get("cover"):
+                entry["cover"] = event["cover"]
+            continue
         if key in matched_feed:
             key = ("activity", event["activity_id"], event["episode"])
         else:

@@ -18,7 +18,7 @@ from PySide6.QtCore import (
     QPropertyAnimation, QRect, QRectF, QMargins, QSignalBlocker, QSize, Qt, QTimer, QUrl,
 )
 from PySide6.QtGui import (
-    QBrush, QColor, QIcon, QImage, QLinearGradient, QPainter, QPen, QPixmap,
+    QBrush, QColor, QFont, QIcon, QImage, QLinearGradient, QPainter, QPen, QPixmap,
     QRadialGradient,
 )
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
@@ -133,7 +133,7 @@ BROWSER_INDEX = {"chrome": 0, "brave": 1, "edge": 2, "opera": 3}
 BROWSER_VALUE = {v: k for k, v in BROWSER_INDEX.items()}
 BROWSER_NAMES = {"chrome": "Chrome", "brave": "Brave", "edge": "Edge", "opera": "Opera"}
 
-THEME_INDEX = {"dark": 0, "light": 1, "system": 2}
+THEME_INDEX = {"dark": 0, "light": 1, "system": 2, "oled": 3}
 THEME_VALUE = {v: k for k, v in THEME_INDEX.items()}
 
 BROADCAST_INDEX = {"discord": 0, "vencord": 1, "both": 2}
@@ -1339,7 +1339,7 @@ class MainWindow(QMainWindow):
 
         header.addSpacing(8)
         self.theme_combo = QComboBox()
-        self.theme_combo.addItems(["Dark", "Light", "System"])
+        self.theme_combo.addItems(["Dark", "Light", "System", "OLED"])
         self.theme_combo.setToolTip("Interface theme. 'System' follows Windows light/dark mode.")
         self.theme_combo.setFixedWidth(88)
         header.addWidget(self.theme_combo)
@@ -1403,13 +1403,17 @@ class MainWindow(QMainWindow):
         main_scroll.setWidget(host)
         self.stack.addWidget(main_scroll)
 
+        from .browse import BrowsePanel
+        self._browse = BrowsePanel()
+        self.stack.addWidget(self._browse)
+
         recent_page = QWidget()
         recent_wrapper = QVBoxLayout(recent_page)
         self._history_classic = QWidget()
         recent_layout = QVBoxLayout(self._history_classic)
         recent_wrapper.addWidget(self._history_classic)
         self._history_modern = HistoryPanel(self._cover_cache_path)
-        self._history_modern.activated.connect(lambda entry: webbrowser.open(entry["url"]) if entry and entry.get("url") else None)
+        self._history_modern.activated.connect(self._open_anime)
         self._history_modern.clear_requested.connect(self._on_clear_history)
         self._history_modern.refresh_requested.connect(self._refresh_history_feed)
         self._history_modern.list.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -1482,13 +1486,17 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(log_page)
 
         self.tabbar.addTab("Main")
+        self.tabbar.addTab("Browse")
+        self._browse_tab_index = self.tabbar.count() - 1
         self.tabbar.addTab("Recently Watched")
+        self._history_tab_index = self.tabbar.count() - 1
         self.tabbar.addTab("Library")
         self._library_tab_index = self.tabbar.count() - 1
         self.tabbar.addTab("Stats")
         self._stats_tab_index = self.tabbar.count() - 1
         self.tabbar.addTab("Settings")
         self.tabbar.addTab("Log")
+        self._log_tab_index = self.tabbar.count() - 1
         self._settings_tab_index = self.tabbar.count() - 2
         self.tabbar.currentChanged.connect(self._on_tab_changed)
         self._build_navigation_shell(outer)
@@ -1795,55 +1803,12 @@ class MainWindow(QMainWindow):
         account_layout.addWidget(account_hint)
         c_layout.addWidget(self._sep())
 
-        self._pwa_card = QFrame()
-        self._pwa_card.setObjectName("card")
-        pwa_layout = QVBoxLayout(self._pwa_card)
-        pwa_layout.setContentsMargins(self._pad,self._pad,self._pad,self._pad)
-        pwa_layout.addWidget(self._field_label("OPEN A SITE AS PWA"))
-        c_layout.addWidget(self._pwa_card)
-        pwa_row = QHBoxLayout()
-        pwa_row.setSpacing(8)
-        self.pwa_url_edit = QLineEdit()
-        self.pwa_url_edit.setPlaceholderText("https://miruro.tv")
-        self.pwa_url_edit.returnPressed.connect(self._launch_pwa_url)
-        pwa_row.addWidget(self.pwa_url_edit, 1)
-        self.launch_pwa_btn = QPushButton("Launch PWA")
-        self.launch_pwa_btn.setToolTip(
-            "Open this URL in a standalone app-style window of your browser "
-            "(works in Chrome and Brave)."
-        )
-        self.launch_pwa_btn.clicked.connect(self._launch_pwa_url)
-        pwa_row.addWidget(self.launch_pwa_btn)
-        pwa_layout.addLayout(pwa_row)
-
-        c_layout.addWidget(self._sep())
-
         self._actions_card = QFrame()
         self._actions_card.setObjectName("card")
         actions_layout = QVBoxLayout(self._actions_card)
         actions_layout.setContentsMargins(self._pad,self._pad,self._pad,self._pad)
         c_layout.addWidget(self._actions_card)
-        self.watch_any_btn = QPushButton("Watch anything…")
-        self.watch_any_btn.setToolTip(
-            "Force a presence for something AniPresence can't detect — an anime "
-            "you're watching on a non-anime site, a movie, a game, anything."
-        )
-        actions_layout.addWidget(self.watch_any_btn)
-        manual_row = QHBoxLayout()
-        manual_row.setSpacing(8)
-        self.clear_manual_btn = QPushButton("Clear manual")
-        self.clear_manual_btn.setObjectName("ghost")
-        self.clear_manual_btn.setToolTip("Stop the manual presence and resume auto-detection.")
-        self.stats_btn = QPushButton("Watch stats")
-        self.stats_btn.setObjectName("ghost")
-        self.stats_btn.setToolTip("Show how long you've watched each show (from your history).")
-        manual_row.addWidget(self.clear_manual_btn)
-        manual_row.addWidget(self.stats_btn)
-        actions_layout.addLayout(manual_row)
-
-        c_layout.addWidget(self._sep())
-
-        self.launch_chrome_btn = QPushButton("Launch Chrome")
+        actions_layout.addWidget(self._field_label("CONNECTION TOOLS"))
         self.reconnect_btn = QPushButton("Reconnect Discord")
         self.clear_rpc_btn = QPushButton("Clear RPC")
         self.backup_btn = QPushButton("Backup config")
@@ -1851,7 +1816,6 @@ class MainWindow(QMainWindow):
         self.backup_btn.setToolTip("Copy config.json to the Desktop")
         self.clear_rpc_btn.setObjectName("ghost")
         self.reconnect_btn.setObjectName("ghost")
-        actions_layout.addWidget(self.launch_chrome_btn)
         action_row = QHBoxLayout()
         action_row.setSpacing(8)
         action_row.addWidget(self.reconnect_btn)
@@ -1869,10 +1833,6 @@ class MainWindow(QMainWindow):
         self._quick_row = QHBoxLayout(self._quick_controls)
         self._quick_row.setContentsMargins(4, 0, 4, 4)
         self._quick_row.addStretch(1)
-        manual = QPushButton("Set activity…")
-        manual.setObjectName("ghost")
-        manual.clicked.connect(lambda: self.watch_any_btn.click())
-        self._quick_row.addWidget(manual)
         dash_root.insertWidget(0, self._quick_controls)
         self._apply_ui_layout()
 
@@ -1888,13 +1848,13 @@ class MainWindow(QMainWindow):
         nav.setContentsMargins(10, 14, 10, 14)
         nav.setSpacing(12)
         self._nav_buttons = []
-        self._page_names = ["Overview", "History", "Library", "Statistics", "Settings", "Activity log"]
+        self._page_names = ["Overview", "Browse", "History", "Library", "Statistics", "Settings", "Activity log"]
         self._page_descriptions = [
-            "Your anime, in the moment.", "Pick up where you left off.",
+            "Your anime, in the moment.", "Discover your next favourite.", "Pick up where you left off.",
             "Your AniList collection, all in one place.", "A little perspective on your watch time.",
             "Make AniPresence feel like you.", "Connection and detection updates."]
         for index, name in enumerate(self._page_names):
-            if index == 4:
+            if index == self._settings_tab_index:
                 nav.addStretch(1)
             button = QPushButton(name)
             button.setObjectName("navButton")
@@ -1996,9 +1956,9 @@ class MainWindow(QMainWindow):
             self._now_column.setAlignment(Qt.AlignTop)
             self._left_pane.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
             self._now_info_layout.setAlignment(Qt.AlignVCenter)
-            self._settings_page.widget().layout().insertWidget(1, self._controls_card)
-            for index,card in enumerate((self._account_card,self._pwa_card,self._actions_card),2):
-                self._settings_page.widget().layout().insertWidget(index,card)
+            self._general_settings.layout().addWidget(self._controls_card)
+            self._account_settings.layout().insertWidget(1, self._account_card)
+            self._connection_settings.layout().addWidget(self._actions_card)
             self._now_top_row.addWidget(self._now_info, 1)
             self._modern_action_row.insertWidget(0, self.open_site_btn)
             self._modern_action_row.insertWidget(1, self.next_ep_btn)
@@ -2021,7 +1981,7 @@ class MainWindow(QMainWindow):
             self._left_pane.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
             self._now_info_layout.setAlignment(Qt.AlignmentFlag(0))
             self._dashboard_row.addWidget(self._controls_card, 4)
-            for index,card in zip((4,6,8),(self._account_card,self._pwa_card,self._actions_card)):
+            for index,card in zip((4,6),(self._account_card,self._actions_card)):
                 self._classic_controls_layout.insertWidget(index,card)
             self._now_card_layout.insertWidget(1, self._now_info)
             self._classic_action_layout.insertWidget(0, self.open_site_btn)
@@ -2039,7 +1999,7 @@ class MainWindow(QMainWindow):
             widget.show()
         self._brand.show()
         self.title_bar.show()
-        for card in (self._account_card,self._pwa_card,self._actions_card):card.show()
+        for card in (self._account_card,self._actions_card):card.show()
         for sep in self._controls_card.findChildren(QFrame):
             if sep.objectName()=="sep":sep.setVisible(not modern)
         self.progress.setTextVisible(not modern)
@@ -2057,6 +2017,7 @@ class MainWindow(QMainWindow):
 
     def _show_account_settings(self):
         self.tabbar.setCurrentIndex(self._settings_tab_index)
+        self._account_section.expand()
         self._settings_page.ensureWidgetVisible(self.anilist_combo)
 
     def _update_layout_spacing(self):
@@ -2150,6 +2111,8 @@ class MainWindow(QMainWindow):
                 view.viewport().update()
         if hasattr(self, "_library_modern") and self._library_modern.isVisible():
             self._library_modern.grid.viewport().update()
+        if hasattr(self, "_browse") and self._browse.isVisible():
+            self._browse.grid.viewport().update()
         if hasattr(self, "_continue_frame") and self._continue_frame.isVisible():
             for card in self._continue_frame.cards:
                 card.update()
@@ -2158,9 +2121,9 @@ class MainWindow(QMainWindow):
         from .continue_watching import ContinueWatching
         frame = ContinueWatching(self._cover_cache_path)
         frame.configure(self.cfg.data.accent)
-        frame.activated.connect(lambda entry: webbrowser.open(entry["url"]) if entry.get("url") else None)
+        frame.activated.connect(self._open_anime)
         frame.removed.connect(self._remove_continue)
-        frame.view_all.connect(lambda: self.tabbar.setCurrentIndex(1))
+        frame.view_all.connect(lambda: self.tabbar.setCurrentIndex(self._history_tab_index))
         self._continue_frame = frame
         self._refresh_continue()
         return frame
@@ -2283,7 +2246,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._library_stack, 1)
         from .library import LibraryPanel
         self._library_modern = LibraryPanel()
-        self._library_modern.activated.connect(lambda entry: webbrowser.open(entry["url"]) if entry.get("url") else None)
+        self._library_modern.activated.connect(self._open_anime)
         self._library_modern.refresh_requested.connect(self._on_refresh_library)
         self._library_modern.calendar_requested.connect(lambda: self._show_library_calendar(True))
         self._library_modern.status_changed.connect(self.controller.change_library_status)
@@ -2384,9 +2347,9 @@ class MainWindow(QMainWindow):
         if QTCHARTS_OK:
             view = QChartView()
             view.setRenderHint(QPainter.Antialiasing)
-            # Compact chart so the per-title list below gets the room.
-            view.setMinimumHeight(150)
-            view.setMaximumHeight(190)
+            # Keep axes and labels fully visible in a normally-sized window.
+            view.setMinimumHeight(300)
+            view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             self._chart_view = view
             cc.addWidget(view)
         else:
@@ -2413,8 +2376,8 @@ class MainWindow(QMainWindow):
         self.stats_search.textChanged.connect(self._apply_stats_filter)
         layout.addWidget(self.stats_search)
         self._stats_stack = QStackedWidget()
-        self._stats_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
-        self._stats_stack.setMinimumHeight(160)
+        self._stats_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self._stats_stack.setMinimumHeight(580)
 
         # "Watch time" page: per-title totals with a Resume button.
         watch_page = QWidget()
@@ -2510,6 +2473,42 @@ class MainWindow(QMainWindow):
         appearance_layout.addWidget(self._appearance_colors)
         layout.addWidget(appearance)
 
+        from PySide6.QtWidgets import QFontComboBox
+        from ..fonts import load_custom_font
+        load_custom_font(self.cfg.data.font_path)
+        font_row = QHBoxLayout()
+        font_row.addWidget(QLabel("Interface font"))
+        self.font_combo = QFontComboBox()
+        self.font_combo.setCurrentFont(QFont(self.cfg.data.font_family))
+        self.font_combo.currentFontChanged.connect(lambda font: self._set_font_family(font.family()))
+        font_row.addWidget(self.font_combo, 1)
+        font_file = QPushButton("Import font…"); font_file.clicked.connect(self._import_font)
+        font_reset = QPushButton("Reset"); font_reset.clicked.connect(lambda: self._set_font_family("Figtree", reset=True))
+        font_row.addWidget(font_file); font_row.addWidget(font_reset)
+        appearance_layout.addLayout(font_row)
+        self.font_message = QLabel("Installed fonts or your own .ttf / .otf file"); self.font_message.setObjectName("subLabel")
+        self.font_message.setWordWrap(True); appearance_layout.addWidget(self.font_message)
+
+        streaming = QFrame(); streaming.setObjectName("card")
+        stream_layout = QVBoxLayout(streaming); stream_layout.setContentsMargins(self._pad, self._pad, self._pad, self._pad)
+        stream_layout.addWidget(self._field_label("OPEN ANIME ON"))
+        from ..core.streaming import SITES
+        self.streaming_combo = QComboBox(); self.streaming_combo.addItems([*SITES, "Custom"])
+        self.streaming_combo.setCurrentText(self.cfg.data.streaming_site)
+        stream_layout.addWidget(self.streaming_combo)
+        self.streaming_url = QLineEdit(self.cfg.data.streaming_search_url)
+        self.streaming_url.setPlaceholderText("https://example.com/search?q={query}")
+        self.streaming_url.setVisible(self.cfg.data.streaming_site == "Custom")
+        stream_layout.addWidget(self.streaming_url)
+        self.streaming_hint = QLabel("Anime clicks open a title search on your selected site. Saved episodes on that site resume directly.")
+        self.streaming_hint.setWordWrap(True); self.streaming_hint.setObjectName("subLabel"); stream_layout.addWidget(self.streaming_hint)
+        self.streaming_combo.currentTextChanged.connect(self._save_streaming_site)
+        self.streaming_url.editingFinished.connect(self._save_streaming_site)
+        layout.addWidget(streaming)
+        self._general_settings = QWidget(); self._general_settings.setObjectName("surfaceContent")
+        QVBoxLayout(self._general_settings).setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._general_settings)
+
         # -- Global hotkeys -------------------------------------------------
         hotkeys = QFrame()
         hotkeys.setObjectName("card")
@@ -2556,6 +2555,7 @@ class MainWindow(QMainWindow):
 
         # -- Discord & browser --------------------------------------------
         conn = QFrame()
+        self._connection_settings = conn
         conn.setObjectName("card")
         cc = QVBoxLayout(conn)
         cc.setContentsMargins(self._pad, self._pad, self._pad, self._pad)
@@ -2705,7 +2705,8 @@ class MainWindow(QMainWindow):
         mm = QVBoxLayout(misc)
         mm.setContentsMargins(self._pad, self._pad, self._pad, self._pad)
         mm.setSpacing(10)
-        mm.addWidget(self._field_label("OTHER SETTINGS"))
+        mm.addWidget(self._field_label("ANILIST CONNECTION & SYNC"))
+        self._account_settings = misc
 
         min_row = QHBoxLayout()
         min_label = QLabel("Minimum match score (%)")
@@ -2719,7 +2720,7 @@ class MainWindow(QMainWindow):
             "more permissive."
         )
         min_row.addWidget(self.match_spin)
-        mm.addLayout(min_row)
+        cc.addLayout(min_row)
 
         ttl_row = QHBoxLayout()
         ttl_label = QLabel("AniList cache (days)")
@@ -2730,7 +2731,7 @@ class MainWindow(QMainWindow):
         self.ttl_spin.setValue(int(self.cfg.data.anilist_cache_ttl_days))
         self.ttl_spin.setToolTip("How long fetched AniList data stays cached.")
         ttl_row.addWidget(self.ttl_spin)
-        mm.addLayout(ttl_row)
+        cc.addLayout(ttl_row)
 
         sync_row = QHBoxLayout()
         self.anilist_sync_check = QCheckBox("Keep AniList in sync (two-way)")
@@ -2820,6 +2821,7 @@ class MainWindow(QMainWindow):
         self.sync_details.setWordWrap(True)
         mm.addWidget(self.sync_details)
 
+        mm = cc
         mm.addWidget(self._field_label("Discord presence"))
         self.presence_options = {}
         for key, label in (
@@ -2834,6 +2836,9 @@ class MainWindow(QMainWindow):
             self.presence_options[key] = check
             mm.addWidget(check)
 
+        diagnostics = QFrame(); diagnostics.setObjectName("card")
+        mm = QVBoxLayout(diagnostics); mm.setContentsMargins(self._pad, self._pad, self._pad, self._pad)
+        layout.addWidget(diagnostics)
         mm.addWidget(self._field_label("Extension diagnostics"))
         self.extension_diagnostics = QLabel("")
         self.extension_diagnostics.setTextFormat(Qt.PlainText)
@@ -2843,6 +2848,9 @@ class MainWindow(QMainWindow):
         extension_folder_btn.clicked.connect(self._open_extension_folder)
         mm.addWidget(extension_folder_btn)
 
+        updates = QFrame(); updates.setObjectName("card")
+        mm = QVBoxLayout(updates); mm.setContentsMargins(self._pad, self._pad, self._pad, self._pad)
+        layout.addWidget(updates)
         mm.addWidget(self._field_label("App updates"))
         self.auto_updates_check = QCheckBox("Check for updates on startup and every 6 hours")
         self.auto_updates_check.setChecked(self.cfg.data.auto_check_updates)
@@ -2869,6 +2877,7 @@ class MainWindow(QMainWindow):
         self.update_status_label.setWordWrap(True)
         mm.addWidget(self.update_status_label)
 
+        mm = cc
         port_row = QHBoxLayout()
         port_label = QLabel("Chrome debugging port")
         port_label.setObjectName("sectionLabel")
@@ -2910,8 +2919,58 @@ class MainWindow(QMainWindow):
         self.settings_hint.setWordWrap(True)
         mm.addWidget(self.settings_hint)
         layout.addWidget(misc)
-
+        from .settings import SettingsSection
+        sections = [(appearance, "Appearance & fonts", True), (streaming, "Streaming destination", True),
+                    (self._general_settings, "General & privacy", False), (misc, "AniList account & sync", True),
+                    (artwork, "Artwork & metadata", False), (conn, "Detection & Discord", False),
+                    (custom, "Custom detection sites", False), (hotkeys, "Keyboard shortcuts", False),
+                    (updates, "Updates", False), (diagnostics, "Extension diagnostics", False)]
+        for content, _, _ in sections: layout.removeWidget(content)
+        self._settings_sections = []
+        for content, title, expanded in sections:
+            section = SettingsSection(title, content, expanded)
+            self._settings_sections.append(section); layout.addWidget(section)
+            if content is misc: self._account_section = section
+            if content is updates: self._updates_section = section
         layout.addStretch(1)
+
+    def _save_streaming_site(self, *_):
+        from ..core.streaming import valid_search_template
+        site = self.streaming_combo.currentText()
+        self.streaming_url.setVisible(site == "Custom")
+        url = self.streaming_url.text().strip()
+        if site == "Custom" and not valid_search_template(url):
+            self.streaming_hint.setText("Enter an HTTP(S) search URL containing {query}, then press Enter or leave the field to save.")
+            return
+        self.cfg.set(streaming_site=site, streaming_search_url=url)
+        self.streaming_hint.setText(f"Anime clicks will open on {site}. Saved episodes on that site resume directly.")
+
+    def _set_font_family(self, family, reset=False):
+        self.cfg.set(font_family=family, **({"font_path": ""} if reset else {}))
+        with QSignalBlocker(self.font_combo):
+            self.font_combo.setCurrentFont(QFont(family))
+        self._apply_stylesheet()
+
+    def _import_font(self):
+        from PySide6.QtWidgets import QFileDialog
+        from ..fonts import load_custom_font
+        import shutil
+        path, _ = QFileDialog.getOpenFileName(self, "Import interface font", "", "Fonts (*.ttf *.otf)")
+        if not path: return
+        family = load_custom_font(path)
+        if not family:
+            self.font_message.setText("This file could not be loaded as a font.")
+            return
+        try:
+            source = Path(path)
+            target = APP_DIR / "fonts" / (hashlib.sha256(source.read_bytes()).hexdigest()[:20] + source.suffix.lower())
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if source.resolve() != target.resolve(): shutil.copyfile(source, target)
+            self.cfg.set(font_path=str(target))
+            self._set_font_family(family)
+            self.font_message.setText(f"Imported {family} · saved with your app settings")
+        except OSError as exc:
+            self.font_message.setText(f"Could not save font: {exc}")
 
     # ---------------------------------------------------------- hotkey io
     def _on_hotkey_record_start(self):
@@ -3214,14 +3273,15 @@ class MainWindow(QMainWindow):
             self.controller.refresh_activity_stats(force=True)
 
     def _resume_stats_item(self, item):
-        url = item.data(Qt.UserRole) or ""
-        if url:
-            webbrowser.open(url)
+        self._open_anime(item.data(Qt.UserRole + 1) or {"title": item.text()})
 
     def _open_anilist_entry(self, item):
-        url = item.data(Qt.UserRole) or ""
-        if url:
-            webbrowser.open(url)
+        self._resume_stats_item(item)
+
+    def _open_anime(self, entry):
+        from ..core.streaming import anime_url
+        if entry:
+            webbrowser.open(anime_url(entry, self.cfg.data.streaming_site, self.cfg.data.streaming_search_url))
 
     def _on_stats_section_changed(self, index):
         self._stats_stack.setCurrentIndex(index)
@@ -3261,6 +3321,7 @@ class MainWindow(QMainWindow):
         else:
             self.library_account_label.setText("")
         self._library_modern.set_sections(sections, message)
+        self._browse.sync_library()
         if self.cfg.data.ui_layout == "modern":
             self._maybe_notify_airing(sections)
             return
@@ -3324,19 +3385,21 @@ class MainWindow(QMainWindow):
             panel.pending_edits.add(identity)
             panel.notice.setText("Updating AniList…")
             panel.notice.show()
+            self._browse.message.setText("Updating AniList…")
             return
         panel.pending_edits.discard(identity)
         if payload.get("error"):
             panel.notice.setText(payload["error"])
             panel.notice.show()
+            self._browse.message.setText(payload["error"])
             return
         panel.notice.hide()
-        cached = getattr(self, "_last_library_payload", None)
-        if not cached:
-            self._on_refresh_library()
-            return
+        cached = getattr(self, "_last_library_payload", None) or {
+            "username": self.controller.active_anilist_account, "sections": self.controller.watchlog.anilist_sections()}
+        cached = dict(cached, sections=cached.get("sections") or {}, message="")
         sections = {key: [e for e in rows if media_id(e) != identity] for key, rows in cached["sections"].items()}
         original = next((e for rows in cached["sections"].values() for e in rows if media_id(e) == identity), None)
+        original = original or payload.get("entry") or next((e for e in self._browse.entries if media_id(e) == identity), None)
         result = payload.get("result") or {}
         if original and not result.get("removed"):
             status = result["status"]
@@ -3344,6 +3407,7 @@ class MainWindow(QMainWindow):
                          updated_at=result.get("updatedAt") or original.get("updated_at", 0))
             sections.setdefault(SECTIONS[status], []).append(entry)
         self._on_library_loaded(dict(cached, sections=sections))
+        self._browse.message.setText("AniList library updated.")
         self._record_activity("Account", f"Library status changed to {payload['status']}", title=(original or {}).get("title"))
 
     def _on_library_search(self, _text):
@@ -3644,7 +3708,9 @@ class MainWindow(QMainWindow):
             if state != getattr(self, "_stats_state", None):
                 self._refresh_stats(visible_only=True)
             self.controller.refresh_activity_stats()
-        if index == 1:
+        if index == self._browse_tab_index:
+            self._browse.ensure_loaded()
+        if index == self._history_tab_index:
             self._on_recent(getattr(self, "_last_recent", self.controller.recent.items()))
             self.controller.refresh_activity_stats()
         if index == self._library_tab_index:
@@ -3652,7 +3718,7 @@ class MainWindow(QMainWindow):
                 self._on_refresh_library()
         if index == 0:
             self._refresh_continue()
-        if index == 5:
+        if index == self._log_tab_index:
             self._activity_panel.refresh()
         self._animate_tab_in(self.stack.currentWidget(), snapshot)
 
@@ -3721,7 +3787,7 @@ class MainWindow(QMainWindow):
         self.mica_check.toggled.connect(self._on_mica_toggled)
         self.cinematic_check.toggled.connect(self._on_cinematic_toggled)
         self.auto_accent_check.toggled.connect(self._on_auto_accent_toggled)
-        self.hide_adult_check.toggled.connect(lambda on: self.cfg.set(hide_adult_content=on))
+        self.hide_adult_check.toggled.connect(self._on_adult_filter_changed)
         self.anilist_combo.currentIndexChanged.connect(self._on_anilist_account_switch)
         self.interval_spin.valueChanged.connect(self._on_interval_changed)
         self.app_id_edit.editingFinished.connect(self._on_app_id_changed)
@@ -3737,7 +3803,6 @@ class MainWindow(QMainWindow):
         self.win_min_btn.clicked.connect(self._animated_minimize)
         self.win_max_btn.clicked.connect(self._toggle_max)
 
-        self.launch_chrome_btn.clicked.connect(self.controller.launch_chrome)
         self.reconnect_btn.clicked.connect(self.controller.reconnect_discord)
         self.clear_rpc_btn.clicked.connect(self.controller.clear_rpc)
         self.open_site_btn.clicked.connect(self._open_site)
@@ -3748,9 +3813,6 @@ class MainWindow(QMainWindow):
         self.copy_url_btn.clicked.connect(self._copy_url)
         self.share_now_btn.clicked.connect(self._on_share_now)
         self.share_tunnel_btn.clicked.connect(self._on_share_tunnel)
-        self.watch_any_btn.clicked.connect(self._on_watch_any)
-        self.clear_manual_btn.clicked.connect(self._on_clear_manual)
-        self.stats_btn.clicked.connect(self._on_stats)
         self.recent_list.itemActivated.connect(self._open_recent_item)
         self.recent_list.customContextMenuRequested.connect(self._recent_menu)
 
@@ -3763,6 +3825,11 @@ class MainWindow(QMainWindow):
         self.hide_no_video_check.toggled.connect(
             lambda on: self.cfg.set(hide_when_no_video=on)
         )
+
+    def _on_adult_filter_changed(self, enabled):
+        self.cfg.set(hide_adult_content=enabled)
+        if self._browse.started:
+            self._browse.reload()
 
     def _load_toggles_from_config(self):
         def load(widget, value):
@@ -3831,6 +3898,13 @@ class MainWindow(QMainWindow):
         from .modern import modern_qss, revamp_qss
         from .effects import glass_qss
         self.centralWidget().configure(self.cfg.data.glass_effects, self._applied_theme, self.cfg.data.accent)
+        from ..fonts import load_custom_font
+        from PySide6.QtGui import QFontDatabase
+        load_custom_font(self.cfg.data.font_path)
+        family = self.cfg.data.font_family
+        if family not in QFontDatabase.families(): family = "Figtree"
+        family = family.replace("\\", "\\\\").replace('"', '\\"')
+        from .modern import oled_qss
         QApplication.instance().setStyleSheet(
             build_theme_qss(
                 self._applied_theme,
@@ -3842,10 +3916,14 @@ class MainWindow(QMainWindow):
             + (glass_qss(self._applied_theme, self.cfg.data.accent) if self.cfg.data.glass_effects else "")
             + (revamp_qss(self._applied_theme,self.cfg.data.accent,self.cfg.data.glass_effects)
                if self.cfg.data.ui_layout == "modern" else "")
+            + (oled_qss() if self._applied_theme == "oled" else "")
+            + f'\nQWidget {{ font-family: "{family}"; }}'
         )
         self._page_heading.accent = self.cfg.data.accent
         self._page_heading.light = self._applied_theme == "light"
+        self._page_heading.scene = self.cfg.data.artwork_theme
         self._page_heading.update()
+        self._sidebar.update()
         self._brand.configure(self.cfg.data.accent, self._applied_theme)
         self._continue_frame.configure(self.cfg.data.accent)
         self._library_modern.configure(self._applied_theme == "light")
@@ -3917,6 +3995,7 @@ class MainWindow(QMainWindow):
             self._on_pick_accent()
             return
         if data:
+            self.cfg.set(artwork_theme=self.accent_combo.itemText(index))
             self._apply_accent(data)
 
     def _apply_accent(self, color):
@@ -3991,7 +4070,7 @@ class MainWindow(QMainWindow):
         login_status = self.anilist_login_status.text()
         draft_fields = {name: getattr(self, name).text() for name in (
             "anilist_secret_edit", "anilist_client_edit", "anilist_token_edit", "tmdb_edit",
-            "pwa_url_edit", "update_feed_edit", "app_id_edit", "stats_search", "library_search")}
+            "update_feed_edit", "app_id_edit", "stats_search", "library_search")}
         chips = [(chip.text(), chip.objectName()) for chip in (self.chrome_chip, self.discord_chip)]
         self._tab_anim_stop()
         for sig in (self.bridge.chrome_status, self.bridge.discord_status,
@@ -4202,9 +4281,6 @@ class MainWindow(QMainWindow):
         browser = BROWSER_VALUE.get(index, "chrome")
         self.cfg.set(browser=browser)
         self.controller.chrome.browser = browser
-        label = self._browser_label(browser)
-        self.launch_chrome_btn.setText(label)
-        self.launch_chrome_btn.setToolTip(f"Launch {BROWSER_NAMES.get(browser, 'Chrome')}")
         self._render_browser_chip()
 
     @staticmethod
@@ -4480,10 +4556,12 @@ class MainWindow(QMainWindow):
         top of the window is never a flat black slab. Renders are cached per
         window size and style so resizing is cheap.
         """
+        self._sidebar.update()
+        self._page_heading.update()
         ambient = self._ambient
         if ambient is None:
             return
-        if not self.cfg.data.cinematic_backdrop:
+        if not self.cfg.data.cinematic_backdrop or self._applied_theme == "oled":
             ambient.hide()
             return
         source = self._cover_pixmap
@@ -4705,10 +4783,7 @@ class MainWindow(QMainWindow):
         self.recent_list.restore_view(view)
 
     def _open_recent_item(self, item):
-        entry = item.data(Qt.UserRole) or {}
-        url = entry.get("url")
-        if url:
-            webbrowser.open(url)
+        self._open_anime(item.data(Qt.UserRole + 1) or item.data(Qt.UserRole) or {})
 
     def _recent_menu(self, pos, listw=None):
         listw = self.recent_list if listw is None else listw
@@ -4728,7 +4803,7 @@ class MainWindow(QMainWindow):
         act_remove = menu.addAction("Remove from history")
         choice = menu.exec(listw.viewport().mapToGlobal(pos))
         if choice is act_open:
-            webbrowser.open(url)
+            self._open_anime(entry)
         elif choice is act_pwa:
             self.controller.launch_pwa(url)
         elif choice is act_remove:
@@ -4852,6 +4927,7 @@ class MainWindow(QMainWindow):
 
     def _show_update_settings(self):
         self.tabbar.setCurrentIndex(self._settings_tab_index)
+        self._updates_section.expand()
         self._settings_page.ensureWidgetVisible(self.update_status_label, 0, 50)
 
     def _download_update(self):
@@ -4894,7 +4970,7 @@ class MainWindow(QMainWindow):
 
     def _record_activity(self, kind, message, **context):
         self._activity.add(kind, message, account=self.controller.active_anilist_account, **context)
-        if hasattr(self,"_activity_panel") and self.tabbar.currentIndex() == 5:
+        if hasattr(self,"_activity_panel") and self.tabbar.currentIndex() == self._log_tab_index:
             self._activity_panel.refresh()
 
     def _log_line(self, message):
@@ -4904,11 +4980,14 @@ class MainWindow(QMainWindow):
     def _load_banner(self, url):
         if url == self._banner_url and not self._page_heading.art.isNull():return
         self._banner_url = url
+        self._page_heading.art = QPixmap()
+        self._page_heading.update()
+        self._sidebar.update()
         if not url:
             self._page_heading.art = QPixmap(); self._page_heading.update(); return
         path=self._cover_cache_path(url)
         if path.exists():
-            self._page_heading.art=QPixmap(str(path));self._page_heading.update()
+            self._page_heading.art=QPixmap(str(path));self._page_heading.update();self._sidebar.update()
         elif url not in self._banner_requests:
             self._banner_requests.add(url)
             self._nam.get(QNetworkRequest(QUrl(url)))
@@ -4982,7 +5061,7 @@ class MainWindow(QMainWindow):
                         self._cover_cache_path(orig).write_bytes(data)
                     except OSError: pass
                     if orig == self._banner_url:
-                        self._page_heading.art=pixmap; self._page_heading.update()
+                        self._page_heading.art=pixmap; self._page_heading.update(); self._sidebar.update()
             reply.deleteLater()
             return
         pending = None
@@ -5183,13 +5262,6 @@ class MainWindow(QMainWindow):
         url = self._current_payload.get("url") if self._current_payload else None
         if url:
             self.controller.launch_pwa(url)
-
-    def _launch_pwa_url(self):
-        url = self._normalize_url(self.pwa_url_edit.text())
-        if not url:
-            return
-        self.pwa_url_edit.setText(url)
-        self.controller.launch_pwa(url)
 
     def _open_anilist(self):
         if self._current_payload and self._current_payload.get("anilist_url"):
@@ -5415,78 +5487,6 @@ class MainWindow(QMainWindow):
         self._log_line(f"Tunnel live: {public} (copied to clipboard)")
         self._notify("Share", f"Public link copied:\n{public}")
 
-    def _on_watch_any(self):
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Watch anything")
-        form = QFormLayout(dialog)
-        form.setLabelAlignment(Qt.AlignLeft)
-        title_edit = QLineEdit()
-        title_edit.setPlaceholderText("e.g. Vinland Saga")
-        form.addRow("Title:", title_edit)
-        ep_edit = QLineEdit()
-        ep_edit.setPlaceholderText("Optional episode number")
-        form.addRow("Episode:", ep_edit)
-        site_edit = QLineEdit()
-        site_edit.setPlaceholderText("e.g. Crunchyroll")
-        form.addRow("Website:", site_edit)
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.button(QDialogButtonBox.Ok).setText("Show presence")
-        buttons.button(QDialogButtonBox.Cancel).setText("Cancel")
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        form.addRow(buttons)
-        title_edit.setFocus()
-        if dialog.exec() != QDialog.Accepted:
-            return
-        title = title_edit.text().strip()
-        if not title:
-            return
-        episode = ep_edit.text().strip()
-        website = site_edit.text().strip() or "Watching"
-        self.controller.set_manual_presence(title, episode, website)
-        self.show_manual_card(title, episode, website)
-        self._log_line(f"Manual presence: {title}" + (f" · Episode {episode}" if episode else "") + f" · {website}")
-        self._notify("AniPresence", "Manual presence is now shown.")
-
-    def show_manual_card(self, title, episode="", website=""):
-        """Fill the card with a manual-presence payload (auto-detection is paused)."""
-        self._current_payload = {"title": title, "episode": episode, "website": website, "url": ""}
-        self.anime_title.setText(title)
-        parts = []
-        if episode:
-            parts.append(f"Episode {episode}")
-        if website:
-            parts.append(f"on {website}")
-        self.episode_label.setText(" · ".join(parts) or "MANUAL PRESENCE")
-        self.match_label.setText("Manual presence — auto-detection paused")
-        self.progress.setValue(0)
-        self.time_cur.setText("00:00")
-        self.time_total.setText("00:00")
-        self.cover_label.clear()
-        self.cover_label.setText("Manual")
-        self._cover_pixmap = None
-        self._ambient_src_version += 1
-        self._cover_spinner.hide()
-        self.open_site_btn.setEnabled(False)
-        self.open_pwa_btn.setEnabled(False)
-        self.open_anilist_btn.setEnabled(False)
-        self.fix_match_btn.setEnabled(False)
-        self.next_ep_btn.setEnabled(False)
-        self.copy_url_btn.setEnabled(False)
-        if self._tray:
-            self._tray_act_site.setEnabled(False)
-            self._tray_act_pwa.setEnabled(False)
-            self._tray.setToolTip(f"AniPresence · {title}")
-            self._reset_tray_icon()
-        self._update_ambient()
-        self._update_preview()
-
-    def _on_clear_manual(self):
-        self.controller.clear_manual_presence()
-        self.show_placeholder()
-        self._log_line("Manual presence cleared; auto-detection resumed.")
-        self._notify("AniPresence", "Manual presence cleared.")
-
     def _on_stats(self):
         self.tabbar.setCurrentIndex(self._stats_tab_index)
 
@@ -5513,7 +5513,10 @@ class MainWindow(QMainWindow):
             attr(handle, 20, ctypes.byref(dark_var), ctypes.sizeof(dark_var))  # immersive dark mode
             corner = ctypes.c_int(2)  # DWMWA_WINDOW_CORNER_PREFERENCE = 33, value 2 = ROUND
             attr(handle, 33, ctypes.byref(corner), ctypes.sizeof(corner))
-            if self.cfg.data.mica_backdrop or self.cfg.data.cinematic_backdrop:
+            if self._applied_theme == "oled":
+                backdrop = ctypes.c_int(1)
+                attr(handle, 38, ctypes.byref(backdrop), ctypes.sizeof(backdrop))
+            elif self.cfg.data.mica_backdrop or self.cfg.data.cinematic_backdrop:
                 mica_var = ctypes.c_int(2)  # DWMWA_SYSTEMBACKDROP_TYPE = 38, value 2 = MICA
                 if attr(handle, 38, ctypes.byref(mica_var), ctypes.sizeof(mica_var)) == 0:
                     return
@@ -5586,6 +5589,7 @@ class MainWindow(QMainWindow):
     def show_placeholder(self):
         self._progress_animation.stop()
         self._current_payload = None
+        self._load_banner("")
         self.anime_title.setText("No anime detected")
         self.episode_label.setText("WATCHING A VIDEO IS ALL IT TAKES")
         self.match_label.setText("")

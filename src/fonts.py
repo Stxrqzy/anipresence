@@ -14,3 +14,20 @@ def register_fonts():
         return None
     fam = QFontDatabase.applicationFontFamilies(fid)
     return fam[0] if fam else None
+
+
+_custom_fonts = {}
+
+
+def load_custom_font(path):
+    """Register a custom font once per process, falling back safely if missing."""
+    if not path:
+        return None
+    if path in _custom_fonts:
+        return _custom_fonts[path]
+    fid = QFontDatabase.addApplicationFont(path)
+    families = QFontDatabase.applicationFontFamilies(fid) if fid >= 0 else []
+    if families:
+        _custom_fonts[path] = families[0]
+        return families[0]
+    return None

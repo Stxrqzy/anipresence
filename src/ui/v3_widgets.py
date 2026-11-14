@@ -72,6 +72,8 @@ class IllustratedHeader(QWidget):
         self.light = False
         self.variant = 0
         self.art = QPixmap()
+        self.scene = "Midnight Violet"
+        self._art_key = None
         self.setMinimumHeight(112)
 
     def paintEvent(self, event):
@@ -80,17 +82,16 @@ class IllustratedHeader(QWidget):
         clip = QPainterPath()
         clip.addRoundedRect(QRectF(self.rect()), 14, 14)
         painter.setClipPath(clip)
-        paint_landscape(painter, QRectF(self.rect()), self.accent, self.light, self.variant)
-        if not self.art.isNull():
-            pixmap=self.art.scaled(self.size(),Qt.KeepAspectRatioByExpanding,Qt.SmoothTransformation)
-            painter.setOpacity(.5 if not self.light else .2)
-            painter.drawPixmap((self.width()-pixmap.width())//2,(self.height()-pixmap.height())//2,pixmap)
-            painter.setOpacity(1)
-            veil=QLinearGradient(0,0,self.width(),0)
-            color=QColor("#eef0f8" if self.light else "#0e0d1b")
-            veil.setColorAt(0,color); color.setAlpha(210); veil.setColorAt(.38,color)
-            color.setAlpha(0); veil.setColorAt(1,color)
-            painter.fillRect(self.rect(),veil)
+        window = self.window()
+        art = self.art
+        if art.isNull() and getattr(window, "_current_payload", None):
+            art = getattr(window, "_cover_pixmap", None) or art
+        theme = getattr(window, "_applied_theme", "dark")
+        key = (self.size(), self.devicePixelRatioF(), self.scene, self.accent, theme, art.cacheKey())
+        if key != self._art_key:
+            self._art_key = key
+            self._rendered = illustrated_surface(self.size(), self.devicePixelRatioF(), self.scene, self.accent, theme, art)
+        painter.drawPixmap(0,0,self._rendered)
 
 
 class IllustratedSidebar(QFrame):
@@ -100,9 +101,45 @@ class IllustratedSidebar(QFrame):
         if not hasattr(window,"cfg") or window.cfg.data.ui_layout!="modern":return
         painter=QPainter(self); painter.setRenderHint(QPainter.Antialiasing)
         clip=QPainterPath();clip.addRoundedRect(QRectF(self.rect().adjusted(1,1,-1,-1)),15,15);painter.setClipPath(clip)
-        painter.setOpacity(.18)
-        paint_landscape(painter,QRectF(0,self.height()*.36,self.width(),self.height()*.49),
-                        window.cfg.data.accent,window._applied_theme=="light",1)
+        art = window._page_heading.art
+        if art.isNull() and getattr(window, "_current_payload", None):
+            art = getattr(window, "_cover_pixmap", None) or art
+        key = (self.size(), self.devicePixelRatioF(), window.cfg.data.artwork_theme, window.cfg.data.accent, window._applied_theme, art.cacheKey())
+        if key != getattr(self, "_art_key", None):
+            self._art_key = key
+            self._rendered = illustrated_surface(self.size(), self.devicePixelRatioF(), window.cfg.data.artwork_theme,
+                                                 window.cfg.data.accent, window._applied_theme, art, sidebar=True)
+        painter.drawPixmap(0,0,self._rendered)
+
+
+def illustrated_surface(size, dpr, scene, accent, theme, art, sidebar=False):
+    from .poster import draw_filled_pixmap
+    from .theme_art import paint_theme
+    pixmap = QPixmap(size*dpr); pixmap.setDevicePixelRatio(dpr); pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap); painter.setRenderHint(QPainter.Antialiasing); painter.setRenderHint(QPainter.SmoothPixmapTransform)
+    rect = QRectF(0,0,size.width(),size.height())
+    base = QColor("#eef0f8" if theme=="light" else "#000000" if theme=="oled" else "#0e0d1b")
+    painter.fillRect(rect,base)
+    if not art.isNull():
+        painter.setOpacity(.38 if sidebar else .65)
+        draw_filled_pixmap(painter,rect,art,0)
+    else:
+        painter.setOpacity(.55 if sidebar else .85)
+        # Use a wide crop of the scene for portrait sidebars rather than stretching it.
+        scene_rect = QRectF(-size.width()*1.8, size.height()*.25, size.width()*2.8, size.height()*.75) if sidebar and scene=="Midnight Violet" else rect
+        if scene == "Midnight Violet":
+            paint_landscape(painter,scene_rect,accent,theme=="light")
+        else:
+            paint_theme(painter,scene_rect,scene,theme=="light")
+    painter.setOpacity(1)
+    veil=QLinearGradient(0,0,0 if sidebar else size.width(),size.height() if sidebar else 0)
+    veil.setColorAt(0,base)
+    base.setAlpha(170 if sidebar else 220); veil.setColorAt(.38,base)
+    base.setAlpha(75 if sidebar else 0); veil.setColorAt(.8,base)
+    if sidebar:
+        base.setAlpha(210); veil.setColorAt(1,base)
+    painter.fillRect(rect,veil); painter.end()
+    return pixmap
 
 
 class Toggle(QCheckBox):

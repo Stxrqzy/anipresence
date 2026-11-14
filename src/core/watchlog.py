@@ -262,7 +262,10 @@ class WatchLog:
             key = (self.revision, date.today())
             if self._analytics_cache and self._analytics_cache[0] == key:
                 return copy.deepcopy(self._analytics_cache[1])
-            references = [e for entries in self._sections.values() for e in entries]
+            statuses = {"Watching": "CURRENT", "Completed": "COMPLETED", "Planning": "PLANNING",
+                        "Paused": "PAUSED", "Dropped": "DROPPED"}
+            references = [dict(e, status=e.get("status") or statuses.get(section))
+                          for section, entries in self._sections.items() for e in entries]
             values = copy.deepcopy((self._titles, self._days, self._episodes, self._activity, references))
         result = reconcile(*values)
         with self._lock:
@@ -299,6 +302,10 @@ class WatchLog:
             with self._lock:
                 if key not in self._history_dismissed:
                     self._history_dismissed.append(key)
+                for identity in entry.get("feed_activity_ids") or []:
+                    activity = ["activity", identity, key[-1]]
+                    if activity not in self._history_dismissed:
+                        self._history_dismissed.append(activity)
                 self._save()
 
     # ------------------------------------------------------------ read side
