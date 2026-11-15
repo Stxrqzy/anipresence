@@ -5,7 +5,7 @@ from PySide6.QtCore import Qt, QRectF, QSize, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QLinearGradient, QPen
 from PySide6.QtWidgets import (QAbstractButton, QFrame, QGridLayout, QHBoxLayout, QLabel,
                               QLineEdit, QPushButton, QScrollArea, QVBoxLayout, QWidget, QComboBox)
-from .details import Artwork, Hero, text
+from .details import Artwork, Hero, text, ImageReveal, artwork_placeholder
 from .poster import draw_filled_pixmap
 
 
@@ -41,6 +41,7 @@ class LandscapeCard(QAbstractButton):
     def __init__(self, entry, history=False):
         super().__init__()
         self.entry = dict(entry); self.history = history
+        self.reveal=ImageReveal(self)
         self.setMinimumWidth(160); self.setFixedHeight(210)
         self.setCursor(Qt.PointingHandCursor); self.setFocusPolicy(Qt.StrongFocus)
         self.setAccessibleName(f"{entry.get('title')} · Episode {entry.get('episode') or '—'}")
@@ -62,6 +63,7 @@ class LandscapeCard(QAbstractButton):
         rect = QRectF(self.rect().adjusted(1, 1, -1, -1))
         clip = QPainterPath(); clip.addRoundedRect(rect, 22, 22); p.setClipPath(clip)
         p.fillRect(rect, QColor("#191919"))
+        artwork_placeholder(p,rect)
         for key in ("episode_art", "backdrop", "banner_url", "cover"):
             url = e.get(key)
             if not url:
@@ -70,7 +72,8 @@ class LandscapeCard(QAbstractButton):
             if pm.isNull():
                 w._request_library_poster(url)
             else:
-                draw_filled_pixmap(p, rect, pm, 0); break
+                p.setOpacity(self.reveal.opacity((url,pm.cacheKey())))
+                draw_filled_pixmap(p, rect, pm, 0);p.setOpacity(1);break
         shade = QLinearGradient(0, self.height()*.2, 0, self.height())
         shade.setColorAt(0, QColor(0, 0, 0, 0)); shade.setColorAt(1, QColor(0, 0, 0, 235))
         p.fillRect(rect, shade)
@@ -82,8 +85,13 @@ class LandscapeCard(QAbstractButton):
         duration, current = e.get("duration") or 0, e.get("current_time") or 0
         if self.history:
             detail += " · " + (e.get("episode_title") or e.get("history_source") or "Local playback")
+            if duration and current/duration>=.9:detail += " · Watched"
+        elif e.get("resume_kind")=="caught_up":
+            detail="All caught up · View details"
+        elif e.get("resume_kind")=="next":
+            detail=f"Up next · Episode {e.get('episode')}"
         elif duration:
-            detail += f" · {math.ceil(max(0, duration-current)/60)}m left"
+            detail += f" · {min(100,round(current/duration*100))}% · {math.ceil(max(0, duration-current)/60)}m left"
         elif e.get("progress"):
             detail += f" · {e['progress']} watched"
         p.drawText(QRectF(18, self.height()-35, self.width()-36, 22), Qt.AlignVCenter,
@@ -139,7 +147,10 @@ class Overview(Page):
         self.subtitle.setText(f"Episode {e.get('episode') or '—'} · {e.get('website') or 'Playing in your browser'}" if e else
                               "Start watching in your browser. Your anime and progress appear here.")
         self.button.setText("Continue watching" if e else "Discover anime")
-        entries = self.window()._continue_frame.entries
+        from .playback import playback_state, resume_entry
+        history=w.controller.watchlog.history(w.controller.recent.items(),copy_result=False)
+        library=w._library_modern.entries
+        entries=[resume_entry(e,playback_state(e,history,library)) for e in w._continue_frame.entries]
         if entries != [c.entry for c in self.cards]:
             clear(self.grid); self.cards = []
             for entry in entries:
@@ -153,7 +164,8 @@ class Overview(Page):
         columns = max(1, min(4, self.viewport().width()//290))
         for i, card in enumerate(self.cards):
             self.grid.addWidget(card, i//columns, i%columns)
-            card.setFixedHeight(max(170, int((self.viewport().width()/columns-28)*.56)))
+            card.setFixedHeight(200)
+        for i in range(4):self.grid.setColumnStretch(i,1 if i<columns else 0)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -251,4 +263,8 @@ def stylesheet(theme):
     QWidget#cinemaRoot QPushButton#winMin, QWidget#cinemaRoot QPushButton#winMax,
     QWidget#cinemaRoot QPushButton#winClose {{padding:0;min-height:0;border-radius:4px;background:transparent;}}
     QWidget#cinemaRoot QFrame#detailHero {{background:transparent;}}
+    QWidget#cinemaRoot QFrame#sidebar {{background:{panel};border:0;border-radius:18px;}}
+    QWidget#cinemaRoot QPushButton#navButton {{background:transparent;color:{muted};text-align:left;padding:14px 12px;border-radius:12px;}}
+    QWidget#cinemaRoot QPushButton#navButton:checked {{background:#383838;color:white;}}
+    QWidget#cinemaRoot QPushButton#profileButton {{background:transparent;text-align:left;padding:10px 4px;border-radius:12px;}}
     """

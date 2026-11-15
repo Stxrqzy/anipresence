@@ -1,7 +1,8 @@
 """Poster-grid library with real list counts, filters and stable sorting."""
 import math
+import time
 from collections import OrderedDict
-from PySide6.QtCore import Qt, QRect, QRectF, QPointF, QSize, Signal
+from PySide6.QtCore import Qt, QRect, QRectF, QPointF, QSize, Signal, QTimer
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QIcon
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QGridLayout, QHBoxLayout,
                               QLabel, QLineEdit, QListWidget, QListWidgetItem, QListView,
@@ -73,6 +74,14 @@ class PosterDelegate(QStyledItemDelegate):
         super().__init__(parent)
         self.frames = OrderedDict()
         self.frame_bytes = 0
+        self.reveals=OrderedDict()
+        self.reveal_timer=QTimer(self);self.reveal_timer.setInterval(16)
+        self.reveal_timer.timeout.connect(self._reveal_tick)
+
+    def _reveal_tick(self):
+        self.parent().viewport().update()
+        if not any(time.monotonic()-started<.2 for started in self.reveals.values()):
+            self.reveal_timer.stop()
 
     def sizeHint(self, option, index):
         return self.parent().gridSize()
@@ -86,8 +95,8 @@ class PosterDelegate(QStyledItemDelegate):
         pixmap = window._images.get(window._cover_cache_path(cover), math.ceil(area.width()*dpr), math.ceil(area.height()*dpr)) if cover else QPixmap()
         if pixmap.isNull() and cover:
             window._request_library_poster(cover)
-        key = (tuple(entry.get(field) for field in ("title", "title_english", "cover", "progress", "episodes", "mean_score", "status", "library_section")),
-               option.rect.width(),option.rect.height(),dpr,pixmap.cacheKey(),window._applied_theme,window.cfg.data.accent,option.font.key())
+        key = (tuple(entry.get(field) for field in ("title", "title_english", "cover", "progress", "episodes", "mean_score", "status", "library_section","relation","season_year")),
+               option.rect.width(),option.rect.height(),dpr,pixmap.cacheKey(),window._applied_theme,window.cfg.data.ui_layout,window.cfg.data.accent,option.font.key())
         if key not in self.frames:
             frame = QPixmap(math.ceil(option.rect.width()*dpr),math.ceil(option.rect.height()*dpr))
             frame.setDevicePixelRatio(dpr);frame.fill(Qt.transparent)
@@ -100,7 +109,16 @@ class PosterDelegate(QStyledItemDelegate):
                 self.frame_bytes-=old.width()*old.height()*4
             self.frames[key]=frame;self.frame_bytes+=cost
         self.frames.move_to_end(key)
-        painter.drawPixmap(option.rect.topLeft(),self.frames[key])
+        painter.save()
+        if window.cfg.data.ui_layout=="cinema" and window.cfg.data.smooth_animations and not pixmap.isNull():
+            reveal=(cover,pixmap.cacheKey())
+            if reveal not in self.reveals:
+                self.reveals[reveal]=time.monotonic()
+                while len(self.reveals)>256:self.reveals.popitem(last=False)
+                self.reveal_timer.start()
+            opacity=min(1,(time.monotonic()-self.reveals[reveal])/.2)
+            painter.setOpacity(opacity)
+        painter.drawPixmap(option.rect.topLeft(),self.frames[key]);painter.restore()
         if option.state & (QStyle.State_Selected|QStyle.State_MouseOver):
             painter.save();painter.setRenderHint(QPainter.Antialiasing)
             painter.setPen(QPen(QColor(window.cfg.data.accent).lighter(125),2));painter.setBrush(Qt.NoBrush)
@@ -116,6 +134,9 @@ class PosterDelegate(QStyledItemDelegate):
         p.setPen(Qt.NoPen); p.setBrush(QColor("#ded8eb" if light else "#202020")); p.drawRoundedRect(area, 20, 20)
         if not pixmap.isNull():
             draw_filled_pixmap(p, area, pixmap, 20)
+        elif cinema:
+            from .details import artwork_placeholder
+            artwork_placeholder(p,area,light)
         clip = QPainterPath(); clip.addRoundedRect(area, 20, 20)
         p.setClipPath(clip, Qt.IntersectClip)
         gradient = QLinearGradient(0, area.top()+area.height()*.42, 0, area.bottom())
@@ -179,6 +200,10 @@ class PosterDelegate(QStyledItemDelegate):
             p.setPen(QColor("#71657e" if light else "#aeaeae"))
             text = f"{progress:,}/{count:,} watched" if count else f"{progress:,} watched"
             p.drawText(QRectF(area.left()+2,area.bottom()+7,area.width()-4,22),Qt.AlignLeft|Qt.AlignVCenter,text)
+        elif cinema and entry.get("relation"):
+            p.setPen(QColor("#666666" if light else "#bbbbbb"))
+            label=entry["relation"]+(f" · {entry['season_year']}" if entry.get("season_year") else "")
+            p.drawText(QRectF(area.left()+2,area.bottom()+7,area.width()-4,22),Qt.AlignLeft|Qt.AlignVCenter,label)
         p.restore()
 
 
@@ -233,7 +258,7 @@ class PosterGrid(QListWidget):
 
     def reflow(self):
         cinema = hasattr(self.window(),"cfg") and self.window().cfg.data.ui_layout == "cinema"
-        columns = max(1, min(8, self.viewport().width()//(235 if cinema else 175)))
+        columns = max(1, min(8, self.viewport().width()//(210 if cinema else 175)))
         # Leave room for Qt's icon-mode wrapping/scrollbar layout margins.
         width = max(140, (self.viewport().width()-24)//columns)
         self.setGridSize(QSize(width, int((width-14)*1.5)+38))

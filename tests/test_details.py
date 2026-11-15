@@ -47,3 +47,11 @@ def test_session_migration_keeps_wrong_profile_token_out_of_active_slot(tmp_path
     assert loaded.data.anilist_sessions == {"alice": "alice-test"}
     assert loaded.data.anilist_access_token == ""
     assert loaded.data.anilist_sync_account == ""
+
+
+def test_trailers_only_use_supported_provider_identifiers():
+    from src.anime.details import trailer_url
+    assert trailer_url({"site":"youtube","id":"abc_123-X"})=="https://www.youtube.com/watch?v=abc_123-X"
+    assert trailer_url({"site":"dailymotion","id":"x123"}).endswith("/video/x123")
+    assert not trailer_url({"site":"youtube","id":"bad&redirect=https://example.com"})
+    assert not trailer_url({"site":"other","id":"123"})

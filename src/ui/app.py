@@ -1136,7 +1136,7 @@ class MainWindow(QMainWindow):
             self.chrome_chip.show()
             self.discord_chip.show()
             self._header_hid_chips = False
-        self._sidebar_account.setVisible(self.cfg.data.ui_layout == "modern")
+        self._sidebar_account.setVisible(self.cfg.data.ui_layout != "classic")
         if hasattr(self,"_cinema_nav_buttons"):
             self._sync_navigation(self.tabbar.currentIndex())
         if w < 900:
@@ -1969,7 +1969,7 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         menu.addAction("Add / connect account…", self._connect_account_menu)
         menu.addAction("Account settings", self._show_account_settings)
-        anchor = self._cinema_account if self.cfg.data.ui_layout == "cinema" else self._sidebar_account
+        anchor = self._sidebar_account
         menu.popup(anchor.mapToGlobal(QPoint(0, anchor.height())))
 
     def _switch_account_menu(self, name):
@@ -2004,8 +2004,8 @@ class MainWindow(QMainWindow):
         self._history_state = None
         self.centralWidget().setObjectName("cinemaRoot" if cinema else "modernRoot" if modern else "classicRoot")
         self._details = self._details_v3 if cinema else self._details_v2
-        self._sidebar.setVisible(modern and not cinema)
-        self._cinema_nav.setVisible(cinema)
+        self._sidebar.setVisible(modern)
+        self._cinema_nav.hide()
         self._page_heading.setVisible(modern and not cinema and not was_details)
         self._tabs_host.setVisible(not modern)
         self._classic_actions.setVisible(not modern)
@@ -2129,7 +2129,7 @@ class MainWindow(QMainWindow):
         self._header_layout.setContentsMargins(inset if modern else 16, 8, inset if modern else 16, 0 if modern else 2)
         if self.cfg.data.ui_layout == "cinema":
             self._body_layout.setContentsMargins(16,0,16,12)
-            self._body_layout.setSpacing(0)
+            self._body_layout.setSpacing(12)
         if modern:
             self._page_heading.setFixedHeight(112)
             self._brand.setFixedHeight(112 - self._sidebar_layout.contentsMargins().top())
@@ -2160,6 +2160,9 @@ class MainWindow(QMainWindow):
             self._update_stats_chart(self._chart_days)
 
     def _reflow_controls(self):
+        direction = QHBoxLayout.TopToBottom if self.cfg.data.ui_layout=="cinema" and self.width()<700 else QHBoxLayout.LeftToRight
+        for row in getattr(self,"_settings_responsive_rows",()):
+            row.setDirection(direction)
         if not hasattr(self, "_control_boxes"):
             return
         modern = self.cfg.data.ui_layout != "classic"
@@ -2571,7 +2574,7 @@ class MainWindow(QMainWindow):
         self.animations_check.setChecked(self.cfg.data.smooth_animations)
         self.animations_check.toggled.connect(self._on_animations_changed)
         appearance_layout.addWidget(self.animations_check)
-        hint = QLabel("V1: original tabs · V2: illustrated sidebar · V3: full-width cinematic pages. Switch live.")
+        hint = QLabel("V1: original tabs · V2: illustrated sidebar · V3: cinematic sidebar and artwork. Switch live.")
         hint.setWordWrap(True)
         hint.setObjectName("subLabel")
         appearance_layout.addWidget(hint)
@@ -2987,6 +2990,7 @@ class MainWindow(QMainWindow):
         self.update_install_btn.clicked.connect(self._install_update)
         update_row.addWidget(self.update_install_btn)
         mm.addLayout(update_row)
+        self._settings_responsive_rows = (font_row,login_row,update_row)
         self.update_status_label = QLabel("")
         self.update_status_label.setTextFormat(Qt.PlainText)
         self.update_status_label.setWordWrap(True)

@@ -121,7 +121,8 @@ def test_v3_live_switching_keeps_details_playback_and_all_versions(make_window):
     window.show();app.processEvents()
     assert window.layout_combo.count()==3
     assert not hasattr(window,"modern_ui_check")
-    assert window._sidebar.isHidden()
+    assert window._sidebar.isVisible()
+    assert window._cinema_nav.isHidden()
     assert window.stack.currentWidget() is window._cinema_overview
     window._on_detection({"title":"Playing","episode":7,"url":"https://ani.pm/test"})
     window._open_anime({"title":"Example","anilist_id":42,"episodes":25})
@@ -163,6 +164,42 @@ def test_v3_history_filters_groups_and_removal(make_window):
     assert not panel.cards
     panel.search.clear()
     assert len(panel.cards)==1 and panel.cards[0].entry["title"]=="Second"
+
+
+def test_v3_sidebar_all_time_and_responsive_episode_details(make_window,monkeypatch):
+    import time
+    app,window=make_window(ui_layout="cinema",smooth_animations=True)
+    entry={"anilist_id":42,"title":"A long anime title for responsive layout",
+           "episode":3,"episodes":12,"url":"https://ani.pm/watch/3",
+           "airing_at":time.time()+90000,"next_episode":4,
+           "trailer_url":"https://www.youtube.com/watch?v=abc123"}
+    window.controller.recent.add(dict(entry,current_time=1380,duration=1400))
+    window.show();app.processEvents()
+    window._open_anime(entry);app.processEvents()
+    page=window._details
+    assert page.resume["episode"]==4 and not page.resume["url"]
+    assert "Airs in" in page.airing.text()
+    assert page.trailer.isVisible()
+    opened=[]
+    monkeypatch.setattr("src.ui.cinema_details.webbrowser.open",opened.append)
+    page.trailer.click()
+    assert opened==[entry["trailer_url"]]
+    for width in (1500,1000,760,600):
+        window.resize(width,850)
+        for _ in range(3):app.processEvents()
+        assert page.widget().width()<=page.viewport().width()
+        assert window._sidebar.isVisible() and window._cinema_nav.isHidden()
+    window._navigate(window._stats_tab_index)
+    window._cinema_stats.select(None)
+    for _ in range(3):app.processEvents()
+    panel=window._cinema_stats
+    assert panel.periods[None].isChecked()
+    assert "all time" in panel.episode_caption.text()
+    assert "Measured playback:" in panel.note.text()
+    assert panel.widget().width()<=panel.viewport().width()
+    window._navigate(window._settings_tab_index)
+    for _ in range(3):app.processEvents()
+    assert window._settings_page.widget().width()<=window._settings_page.viewport().width()
 
 
 def test_overview_logo_fallback_and_account_flyout(make_window, monkeypatch, tmp_path):

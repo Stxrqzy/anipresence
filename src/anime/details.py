@@ -12,6 +12,7 @@ query ($id: Int, $search: String) {
     episodes duration meanScore genres format status seasonYear season
     startDate { year month day } tags { name isAdult }
     nextAiringEpisode { episode airingAt }
+    trailer { id site }
     studios(isMain: true) { nodes { name } }
     relations { edges { relationType node {
       id type isAdult title { english romaji native }
@@ -43,6 +44,16 @@ def entry_from_media(media):
             "mean_score": media.get("meanScore"), "genres": media.get("genres") or [], "format": media.get("format")}
 
 
+def trailer_url(trailer):
+    trailer=trailer or {}
+    identity=str(trailer.get("id") or "")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}",identity):return ""
+    site=str(trailer.get("site") or "").lower()
+    if site=="youtube":return f"https://www.youtube.com/watch?v={identity}"
+    if site=="dailymotion":return f"https://www.dailymotion.com/video/{identity}"
+    return ""
+
+
 def load_details(entry, hide_adult=True):
     client = AniListClient()
     try:
@@ -57,6 +68,7 @@ def load_details(entry, hide_adult=True):
                       duration=media.get("duration"),
                       next_episode=(media.get("nextAiringEpisode") or {}).get("episode"),
                       airing_at=(media.get("nextAiringEpisode") or {}).get("airingAt"),
+                      trailer_url=trailer_url(media.get("trailer")),
                       season=media.get("season"), start_date=media.get("startDate") or {},
                       native_title=(media.get("title") or {}).get("native") or "",
                       tags=[t["name"] for t in media.get("tags") or [] if not (hide_adult and t.get("isAdult"))],
@@ -65,6 +77,8 @@ def load_details(entry, hide_adult=True):
             dict(entry_from_media(edge["node"]), relation=edge["relationType"].replace("_", " ").title())
             for edge in (media.get("relations") or {}).get("edges") or []
             if edge["node"].get("type") == "ANIME" and not (hide_adult and edge["node"].get("isAdult"))]
+        order={"Prequel":0,"Sequel":1,"Parent":2,"Side Story":3,"Spin Off":4}
+        result["related"].sort(key=lambda e:(order.get(e["relation"],5),e.get("season_year") or 9999,e["title"]))
         result["recommendations"] = [
             entry_from_media(node["mediaRecommendation"])
             for node in (media.get("recommendations") or {}).get("nodes") or []

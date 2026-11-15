@@ -15,6 +15,25 @@ from the page title.
 
 ### Version 3.0 interface
 
+Version 3.0.10 adds a **sidebar to V3**, with an icon-only rail on narrow windows
+and the account menu at the bottom. Artwork has loading placeholders and short
+reveals that respect the animation setting. Missing episode stills fall back to
+clearly labelled series artwork.
+
+**Continue Watching** now suggests the next unwatched episode after recorded
+completion, retains partial replays, and shows resume percentages or a caught-up
+state. Episode tiles show watched/resume badges using saved playback and AniList
+progress. Details add an **airing countdown**, local airing time, a **Trailer**
+action when AniList supplies one, and labelled prequel/sequel ordering.
+On narrow windows, anime information can be expanded inline. Related and
+recommended posters scroll with the detail page.
+
+**Watch time → All time** includes reconciled list progress and measured playback.
+Its chart uses dated activity only, with monthly buckets for long histories;
+the heatmap shows the latest year. Measured, estimated and undated totals are
+identified separately. Dated ranges show comparison with the previous equal
+period, and charts include legends and hover values.
+
 Version 3.0.9 introduces **V3 · Cinema**, a new full-width interface with compact
 horizontal navigation, cinematic artwork, larger rounded poster grids, landscape
 Continue Watching cards and grouped, searchable watch history.

@@ -1,6 +1,6 @@
 """In-app details with bounded episode pages and asynchronous metadata/artwork."""
 import threading
-from PySide6.QtCore import Qt, QRectF, Signal
+from PySide6.QtCore import Qt, QRectF, Signal, QVariantAnimation, QEasingCurve
 from PySide6.QtGui import QColor, QPainter, QLinearGradient, QPixmap
 from PySide6.QtWidgets import (QWidget, QScrollArea, QFrame, QVBoxLayout, QHBoxLayout,
                               QGridLayout, QLabel, QPushButton, QComboBox, QSizePolicy)
@@ -8,38 +8,89 @@ from ..anime.details import load_details
 from .poster import draw_filled_pixmap
 
 
+class ImageReveal:
+    """One short reveal per arriving image; respects the motion preference."""
+    def __init__(self, widget):
+        self.widget=widget;self.key=None
+        self.animation=QVariantAnimation(widget);self.animation.setDuration(200)
+        self.animation.setStartValue(0.0);self.animation.setEndValue(1.0)
+        self.animation.setEasingCurve(QEasingCurve.OutCubic)
+        self.animation.valueChanged.connect(lambda _:widget.update())
+
+    def opacity(self, key):
+        window=self.widget.window()
+        enabled=hasattr(window,"cfg") and window.cfg.data.ui_layout=="cinema" and window.cfg.data.smooth_animations
+        if key!=self.key:
+            self.key=key;self.animation.stop()
+            if enabled:self.animation.start()
+        return float(self.animation.currentValue() or 0) if enabled and self.animation.state()==QVariantAnimation.Running else 1.0
+
+
+def artwork_placeholder(painter, rect, light=False, caption=""):
+    painter.save();painter.setRenderHint(QPainter.Antialiasing)
+    gradient=QLinearGradient(rect.topLeft(),rect.bottomRight())
+    gradient.setColorAt(0,QColor("#e7e7e7" if light else "#222222"))
+    gradient.setColorAt(1,QColor("#f4f4f4" if light else "#101010"))
+    painter.setPen(Qt.NoPen);painter.setBrush(gradient);painter.drawRoundedRect(rect,12,12)
+    painter.setBrush(QColor("#d2d2d2" if light else "#303030"))
+    cx,cy=rect.center().x(),rect.center().y()
+    painter.drawRoundedRect(QRectF(cx-24,cy-24,48,32),8,8)
+    painter.drawRoundedRect(QRectF(cx-36,cy+17,72,5),2,2)
+    if caption:
+        painter.setPen(QColor("#666666" if light else "#999999"))
+        painter.drawText(rect.adjusted(8,rect.height()*.65,-8,-4),Qt.AlignCenter|Qt.TextWordWrap,caption)
+    painter.restore()
+
+
 class Artwork(QWidget):
     """Transparent fitted logos, or cropped artwork, using the shared decoded cache."""
     def __init__(self, fit=False):
         super().__init__()
         self.url = ""
+        self.fallback_url = ""
+        self.using_fallback = False
         self.fit = fit
+        self.reveal=ImageReveal(self)
         self.setObjectName("surfaceContent")
 
     def pixmap(self):
-        if not self.url:
-            return QPixmap()
         window = self.window()
-        pm = window._images.get(window._cover_cache_path(self.url), 960, 540)
-        if pm.isNull():
-            window._request_library_poster(self.url)
-        return pm
+        self.using_fallback=False
+        for url in (self.url,self.fallback_url):
+            if not url:continue
+            pm = window._images.get(window._cover_cache_path(url), 960, 540)
+            if pm.isNull():window._request_library_poster(url)
+            else:
+                self.using_fallback=url!=self.url
+                return pm
+        return QPixmap()
 
     def paintEvent(self, event):
         pm = self.pixmap()
+        cinema=hasattr(self.window(),"cfg") and self.window().cfg.data.ui_layout=="cinema"
         if pm.isNull():
             if not self.fit:
                 p = QPainter(self)
-                p.setPen(QColor("#888888"))
-                p.drawText(self.rect(), Qt.AlignCenter, "Artwork unavailable")
+                if cinema:
+                    loading=self.url and self.url not in getattr(self.window(),"_poster_failed",set())
+                    artwork_placeholder(p,QRectF(self.rect()),self.window()._applied_theme=="light",
+                                        "Loading artwork…" if loading else "No image available")
+                else:
+                    p.setPen(QColor("#888888"))
+                    p.drawText(self.rect(), Qt.AlignCenter, "Artwork unavailable")
             return
         p = QPainter(self)
         p.setRenderHint(QPainter.SmoothPixmapTransform)
+        if cinema and not self.fit:artwork_placeholder(p,QRectF(self.rect()),self.window()._applied_theme=="light")
+        p.setOpacity(self.reveal.opacity((self.url,self.fallback_url,pm.cacheKey())))
         if self.fit:
             size = pm.size().scaled(self.size(), Qt.KeepAspectRatio)
             p.drawPixmap(QRectF(0, (self.height()-size.height())/2, size.width(), size.height()), pm, QRectF(pm.rect()))
         else:
             draw_filled_pixmap(p, QRectF(self.rect()), pm, 12)
+        if cinema and self.using_fallback:
+            p.setOpacity(1);p.fillRect(QRectF(0,self.height()-24,self.width(),24),QColor(0,0,0,150))
+            p.setPen(Qt.white);p.drawText(QRectF(4,self.height()-24,self.width()-8,24),Qt.AlignCenter,"Series artwork")
 
 
 class Hero(QFrame):
