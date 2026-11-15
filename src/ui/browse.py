@@ -20,7 +20,10 @@ class BrowsePanel(QWidget):
         self.has_next = False
         self.started = False
         layout = QVBoxLayout(self); layout.setContentsMargins(0, 0, 0, 0); layout.setSpacing(12)
+        self.heading = QLabel("Browse anime");self.heading.setObjectName("cinemaHeading");self.heading.hide()
+        layout.addWidget(self.heading)
         row = QHBoxLayout()
+        self.toolbar = row
         self.search = QLineEdit(); self.search.setPlaceholderText("Search anime…"); self.search.setClearButtonEnabled(True)
         self.sort = QComboBox()
         for title, value in (("Trending", "TRENDING_DESC"), ("Popular", "POPULARITY_DESC"), ("Highest rated", "SCORE_DESC"),
@@ -69,6 +72,16 @@ class BrowsePanel(QWidget):
         self.timer = QTimer(self); self.timer.setSingleShot(True); self.timer.setInterval(400); self.timer.timeout.connect(self.reload)
         self.search.textChanged.connect(self.schedule); self.sort.currentIndexChanged.connect(self.schedule)
         self.result_ready.connect(self.receive)
+
+    def configure_layout(self, cinema):
+        self.cinema = cinema
+        self.heading.setVisible(cinema)
+        self.search.setMinimumHeight(42 if cinema else 0)
+        self.search.setMaximumWidth(340 if cinema else 16777215)
+        for control in self.controls.values():
+            control.setObjectName("cinemaFilter" if cinema else "")
+        self.grid.reflow()
+        self.reflow_filters()
 
     def filters(self):
         values = {key: control.currentData() for key, control in self.controls.items() if isinstance(control, QComboBox)}
@@ -152,7 +165,20 @@ class BrowsePanel(QWidget):
             self.load_more()
 
     def resizeEvent(self, event):
-        columns = max(2, min(5, self.width()//170))
+        self.reflow_filters()
+        super().resizeEvent(event)
+
+    def reflow_filters(self):
+        inline = getattr(self,"cinema",False) and self.width()>=1400
+        if inline != getattr(self,"_inline_filters",None):
+            self._inline_filters = inline
+            self.layout().removeWidget(self.filter_box);self.toolbar.removeWidget(self.filter_box)
+            if inline:self.toolbar.insertWidget(2,self.filter_box,4)
+            else:self.layout().insertWidget(2,self.filter_box)
+            self.filter_box.setVisible(inline or self.filters_button.isChecked())
+            self.filters_button.setVisible(not inline)
+        columns = len(self.controls) if inline else max(2, min(5, self.width()//170))
         for i, control in enumerate(self.controls.values()):
             self.filters_layout.removeWidget(control); self.filters_layout.addWidget(control, i//columns, i%columns)
-        super().resizeEvent(event)
+        for i in range(len(self.controls)):
+            self.filters_layout.setColumnStretch(i,1 if i<columns else 0)

@@ -20,7 +20,7 @@ class GlassBackground(QWidget):
         super().paintEvent(event)
         if self.theme != "light":
             painter = QPainter(self)
-            painter.fillRect(self.rect(), QColor("#000000" if self.theme == "oled" else "#141414"))
+            painter.fillRect(self.rect(), QColor("#000000" if self.theme == "oled" or self.objectName()=="cinemaRoot" else "#141414"))
             return
         if not self.glass:
             return

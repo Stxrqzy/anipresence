@@ -94,7 +94,7 @@ def test_layout_switch_keeps_live_widgets_and_async_operations(tmp_path, monkeyp
         cover, token = window.cover_label, window.anilist_token_edit
         window.tabbar.setCurrentIndex(window._settings_tab_index)
         for modern in (False, True, False, True):
-            window.modern_ui_check.setChecked(modern)
+            window.layout_combo.setCurrentIndex(1 if modern else 0)
             app.processEvents()
             expected = 'modern' if modern else 'classic'
             assert ConfigManager(cfg.path).data.ui_layout == expected

@@ -30,7 +30,7 @@ def make_window(tmp_path, monkeypatch):
 
     def create(**settings):
         cfg = ConfigManager(tmp_path / f"config-{len(windows)}.json")
-        cfg.set(auto_check_updates=False, chrome_auto_launch=False, onboarding_complete=True)
+        cfg.set(auto_check_updates=False, chrome_auto_launch=False, onboarding_complete=True, ui_layout="modern")
         cfg.set(**settings)
         bridge = UiBridge()
         window = MainWindow(cfg, bridge, Controller(cfg, bridge))
@@ -116,6 +116,55 @@ def test_detail_navigation_stale_results_pagination_and_watch(make_window, monke
     assert window.stack.currentWidget() is not page
 
 
+def test_v3_live_switching_keeps_details_playback_and_all_versions(make_window):
+    app,window=make_window(ui_layout="cinema",smooth_animations=False)
+    window.show();app.processEvents()
+    assert window.layout_combo.count()==3
+    assert not hasattr(window,"modern_ui_check")
+    assert window._sidebar.isHidden()
+    assert window.stack.currentWidget() is window._cinema_overview
+    window._on_detection({"title":"Playing","episode":7,"url":"https://ani.pm/test"})
+    window._open_anime({"title":"Example","anilist_id":42,"episodes":25})
+    page=window._details
+    page.search_episode.setText("25");page.jump_episode()
+    assert page.cards[0][0]==25 and len(page.cards)==1
+    page.search_episode.setText("999");page.jump_episode()
+    assert len(page.cards)==1
+    for index,mode in ((0,"classic"),(1,"modern"),(2,"cinema")):
+        window.layout_combo.setCurrentIndex(index);app.processEvents()
+        assert window.cfg.data.ui_layout==mode
+        assert window.stack.currentWidget() is window._details
+        assert window._details.entry["anilist_id"]==42
+        assert window._current_payload["title"]=="Playing"
+    window._details.go_back()
+    assert window.stack.currentWidget() is window._cinema_overview
+    window._navigate(window._stats_tab_index)
+    assert window.stack.currentWidget() is window._cinema_stats
+    window._cinema_stats.select(365)
+    assert len(window._cinema_stats.chart.series)==53
+    window.resize(760,800);app.processEvents()
+    assert window._cinema_stats.widget().width()<=window._cinema_stats.viewport().width()
+    window._navigate(window._history_tab_index)
+    assert window.stack.currentWidget() is window._cinema_history
+    window.show_placeholder()
+    assert not window._cinema_overview.payload
+
+
+def test_v3_history_filters_groups_and_removal(make_window):
+    app,window=make_window(ui_layout="cinema",smooth_animations=False)
+    window.controller.recent.add({"title":"First","episode":1,"url":"https://ani.pm/1"})
+    window.controller.recent.add({"title":"Second","episode":2,"url":"https://ani.pm/2"})
+    panel=window._cinema_history
+    panel.refresh()
+    assert len(panel.cards)==2
+    panel.search.setText("First")
+    assert len(panel.cards)==1
+    panel.remove(panel.cards[0].entry)
+    assert not panel.cards
+    panel.search.clear()
+    assert len(panel.cards)==1 and panel.cards[0].entry["title"]=="Second"
+
+
 def test_overview_logo_fallback_and_account_flyout(make_window, monkeypatch, tmp_path):
     from PySide6.QtGui import QPixmap, QColor
     app, window = make_window(overview_title_logo=True, anilist_accounts=["Alice", "Bob"],
@@ -198,10 +247,10 @@ def test_library_filters_sorting_account_reset_and_layout_switch(make_window):
     for _ in range(5): app.processEvents()
     assert panel.grid.visualItemRect(panel.grid.item(1)).x() > 0
     assert panel.grid.visualItemRect(panel.grid.item(1)).right() < panel.grid.viewport().width()
-    window.modern_ui_check.setChecked(False)
+    window.layout_combo.setCurrentIndex(0)
     assert panel.isHidden()
     assert window._library_section_lists["Watching"].count() == 2
-    window.modern_ui_check.setChecked(True)
+    window.layout_combo.setCurrentIndex(1)
     assert not panel.isHidden()
     window.anilist_combo.setCurrentIndex(window.anilist_combo.findData("Bob"))
     assert not panel.entries
@@ -492,7 +541,7 @@ def test_transitions_cancel_cleanly_and_progress_finishes_on_disable(make_window
     window.animations_check.setChecked(True)
     window.tabbar.setCurrentIndex(0)
     assert window._tab_overlay is not None
-    window.modern_ui_check.setChecked(False)
+    window.layout_combo.setCurrentIndex(0)
     assert window._tab_overlay is None
     window._on_detection(dict(payload, current_time=150))
     window.show_placeholder()
@@ -508,7 +557,7 @@ def test_glass_applies_on_first_open_and_persists_across_layouts(make_window):
     window.glass_check.setChecked(False)
     assert not window.centralWidget().glass
     assert "border-top-color" not in app.styleSheet()
-    window.modern_ui_check.setChecked(False)
+    window.layout_combo.setCurrentIndex(0)
     window.glass_check.setChecked(True)
     assert window.centralWidget().glass
     assert "border-top-color" in app.styleSheet()

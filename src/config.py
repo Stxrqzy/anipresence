@@ -51,7 +51,7 @@ class Config:
     streaming_site: str = "ani.pm"
     streaming_search_url: str = ""
     navigation_version: int = 2
-    ui_layout: str = "modern"       # "modern" | "classic"
+    ui_layout: str = "cinema"       # V1 classic | V2 modern | V3 cinema
     glass_effects: bool = True
     smooth_animations: bool = True
     accent: str = "#7c5cff"
@@ -109,7 +109,9 @@ class ConfigManager:
             self.data = Config(**valid)
         except (json.JSONDecodeError, TypeError, ValueError):
             return
-        if self.data.ui_layout not in ("modern", "classic"):
+        if self.data.ui_layout not in ("modern", "classic", "cinema"):
+            self.data.ui_layout = "modern"
+        if "ui_layout" not in raw:
             self.data.ui_layout = "modern"
         if self.data.cover_source not in ("tmdb", "anilist"):
             self.data.cover_source = "tmdb"

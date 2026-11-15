@@ -15,6 +15,22 @@ from the page title.
 
 ### Version 3.0 interface
 
+Version 3.0.9 introduces **V3 · Cinema**, a new full-width interface with compact
+horizontal navigation, cinematic artwork, larger rounded poster grids, landscape
+Continue Watching cards and grouped, searchable watch history.
+**Settings → Appearance & fonts** now has a live interface dropdown:
+**V1 · Original**, **V2 · Current**, and **V3 · Cinema**. New installations default
+to V3; upgrades retain their existing layout preference.
+
+V3 details include a poster/facts rail, episode tiles and episode-number jump,
+**Episodes / Related / More like this** tabs, a library-status menu, link sharing
+and an AniList shortcut. Recommendations, tags and facts come from AniList;
+configured TMDB credentials supply episode artwork and title logos.
+The new **Watch time** dashboard offers 30/90/365-day ranges, a large daily
+episode/hour chart (weekly hours for the yearly range), an activity heatmap,
+weekday activity, library rings and most-watched titles. Range totals use dated,
+reconciled activity; completion metrics use measured local playback.
+
 Version 3.0.8 adds **in-app anime details**. Open an anime from Browse, Library,
 History, Statistics or Continue Watching to see its backdrop, poster, synopsis,
 metadata, episode cards and related anime. Back returns to your previous page.
@@ -199,10 +215,9 @@ with episode progress and scores, and reorganized Settings cards.
   paused state when paused, auto-launches Chrome with the debugging flag.
 - **Desktop UI** — dark PySide6 window with live status, cover art, progress
   bar, controls, recently-watched history and a log panel.
-- **Modern or Classic** — the new default layout has sidebar navigation, a
-  focused Now Playing card and streamlined actions. Switch instantly under
-  **Settings → Appearance → Use modern interface**; turn it off for the original
-  tabbed layout. Both layouts support dark/light/OLED themes and AniList browser login.
+- **Three interface versions** — switch instantly under **Settings → Appearance
+  & fonts** between V1's original tabs, V2's sidebar and V3's cinematic pages.
+  All layouts support dark/light/OLED themes and AniList browser login.
 - **Glass & motion** — translucent panels, soft accent lighting and fine edge
   highlights in both layouts. Navigation uses a lightweight accent-line transition, and
   playback progress eases between updates. Both effects can be disabled in

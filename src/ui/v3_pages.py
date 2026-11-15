@@ -369,7 +369,7 @@ class AnalyticsPanel(QWidget):
         self.sync_timer = QTimer(self)
         self.sync_timer.setInterval(300000)
         self.sync_timer.timeout.connect(lambda: self.controller.refresh_activity_stats()
-                                       if self.window().isVisible() and self.window().stack.currentIndex() in
+                                       if self.window().isVisible() and self.window().tabbar.currentIndex() in
                                        (self.window()._history_tab_index, self.window()._stats_tab_index) else None)
         self.sync_timer.start()
 

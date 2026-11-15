@@ -110,6 +110,7 @@ class PosterDelegate(QStyledItemDelegate):
         window = self.parent().window()
         area = QRectF(option.rect).adjusted(7, 5, -7, -33)
         light = window._applied_theme == "light"
+        cinema = window.cfg.data.ui_layout == "cinema"
         accent = QColor(window.cfg.data.accent)
         p = painter; p.save(); p.setRenderHint(QPainter.Antialiasing)
         p.setPen(Qt.NoPen); p.setBrush(QColor("#ded8eb" if light else "#202020")); p.drawRoundedRect(area, 20, 20)
@@ -129,6 +130,8 @@ class PosterDelegate(QStyledItemDelegate):
         count = entry.get("episodes")
         score = entry.get("mean_score")
         text = f"{count} eps" if count else "Episodes TBA"
+        if cinema and entry.get("genres"):
+            text = f"{entry['genres'][0][:9]} · {count or '—'} eps"
         p.setPen(QColor("#f5d976") if score else QColor("#dad6e1"))
         meta = area.adjusted(8, area.height()-34, -8, -10)
         if score:
@@ -161,7 +164,12 @@ class PosterDelegate(QStyledItemDelegate):
         p.setBrush(Qt.NoBrush); p.setPen(QPen(QColor(255,255,255,150),1)); p.drawRoundedRect(badge,12,12)
         p.setPen(QPen(QColor("#20232d"), 1.8,Qt.SolidLine,Qt.RoundCap,Qt.RoundJoin)); p.setBrush(Qt.NoBrush)
         status = entry.get("library_section")
-        draw_status(p,badge.center(),entry.get("status") or status)
+        if cinema and (entry.get("status") in ("CURRENT","REPEATING") or status=="Watching"):
+            c=badge.center();eye=QPainterPath()
+            eye.moveTo(c.x()-9,c.y());eye.quadTo(c.x(),c.y()-10,c.x()+9,c.y());eye.quadTo(c.x(),c.y()+10,c.x()-9,c.y())
+            p.drawPath(eye);p.drawEllipse(c,3,3)
+        else:
+            draw_status(p,badge.center(),entry.get("status") or status)
         p.setClipping(False)
         from PySide6.QtWidgets import QStyle
         if option.state & (QStyle.State_Selected | QStyle.State_MouseOver):
@@ -221,7 +229,11 @@ class PosterGrid(QListWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        columns = max(1, min(8, self.viewport().width()//175))
+        self.reflow()
+
+    def reflow(self):
+        cinema = hasattr(self.window(),"cfg") and self.window().cfg.data.ui_layout == "cinema"
+        columns = max(1, min(8, self.viewport().width()//(235 if cinema else 175)))
         # Leave room for Qt's icon-mode wrapping/scrollbar layout margins.
         width = max(140, (self.viewport().width()-24)//columns)
         self.setGridSize(QSize(width, int((width-14)*1.5)+38))
@@ -305,10 +317,13 @@ class LibraryPanel(QWidget):
     def configure(self, light):
         ink="#25202f" if light else "#edeaf2";base="#e8e3ed" if light else "#201c2b"
         selected="#272130" if light else "#f1f1f3";selected_ink="#ffffff" if light else "#151318"
+        if self.window().cfg.data.ui_layout == "cinema" and not light:
+            ink="#eeeeee";base="#121212";selected="#f1f1f1";selected_ink="#111111"
         for button in self.buttons.values():
             button.setStyleSheet(f'QPushButton {{ background:{base};color:{ink};border:0;border-radius:20px;padding:0 14px; }} '
                                  f'QPushButton:checked {{ background:{selected};color:{selected_ink}; }}')
         self.grid.viewport().update()
+        self.grid.reflow()
 
     def select_section(self, section):
         self.section=section

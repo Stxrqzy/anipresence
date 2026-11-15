@@ -1137,6 +1137,8 @@ class MainWindow(QMainWindow):
             self.discord_chip.show()
             self._header_hid_chips = False
         self._sidebar_account.setVisible(self.cfg.data.ui_layout == "modern")
+        if hasattr(self,"_cinema_nav_buttons"):
+            self._sync_navigation(self.tabbar.currentIndex())
         if w < 900:
             self._sidebar_account.setText("")
         else:
@@ -1492,6 +1494,16 @@ class MainWindow(QMainWindow):
         from .details import DetailsPage
         self._details = DetailsPage()
         self.stack.addWidget(self._details)
+        self._details_v2 = self._details
+        from .cinema import Overview, History
+        from .cinema_stats import Statistics
+        from .cinema_details import CinemaDetails
+        self._cinema_overview = Overview()
+        self._cinema_history = History()
+        self._cinema_stats = Statistics()
+        self._details_v3 = CinemaDetails()
+        for page in (self._cinema_overview, self._cinema_history, self._cinema_stats, self._details_v3):
+            self.stack.addWidget(page)
 
         self.tabbar.addTab("Main")
         self.tabbar.addTab("Browse")
@@ -1902,6 +1914,20 @@ class MainWindow(QMainWindow):
         heading.addWidget(self._page_title)
         heading.addWidget(self._page_description)
         content.addWidget(self._page_heading)
+        self._cinema_nav = QWidget()
+        self._cinema_nav.setObjectName("surfaceContent")
+        bar = QHBoxLayout(self._cinema_nav); bar.setContentsMargins(8, 0, 8, 8); bar.setSpacing(4)
+        self._cinema_nav_buttons = []
+        for i, name in enumerate(("Home", "Browse", "History", "Watchlist", "Watch time", "Settings", "Activity")):
+            button = QPushButton(name); button.setObjectName("cinemaNav"); button.setCheckable(True)
+            button.setToolTip(self._page_names[i])
+            button.clicked.connect(lambda checked=False,index=i:self._navigate(index))
+            bar.addWidget(button);self._cinema_nav_buttons.append(button)
+        bar.addStretch()
+        self._cinema_account = QPushButton("Account");self._cinema_account.setObjectName("cinemaPill")
+        self._cinema_account.clicked.connect(self._show_account_menu);bar.addWidget(self._cinema_account)
+        content.addWidget(self._cinema_nav)
+        self._cinema_nav.hide()
         content.addWidget(self.stack, 1)
         body.addLayout(content, 1)
         outer.addLayout(body, 1)
@@ -1917,6 +1943,12 @@ class MainWindow(QMainWindow):
         self._page_description.setText(self._page_descriptions[index])
         self._page_heading.variant = index
         self._page_heading.update()
+        if hasattr(self, "_cinema_nav_buttons"):
+            for i, button in enumerate(self._cinema_nav_buttons):
+                button.setChecked(i == index)
+                button.setIcon(navigation_icon(i, "#aaaaaa"))
+                button.setText(("", "", "", "", "", "", "")[i] if self.width()<900 else
+                               ("Home","Browse","History","Watchlist","Watch time","Settings","Activity")[i])
 
     def _navigate(self, index):
         if self.tabbar.currentIndex() == index:
@@ -1937,7 +1969,8 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         menu.addAction("Add / connect account…", self._connect_account_menu)
         menu.addAction("Account settings", self._show_account_settings)
-        menu.popup(self._sidebar_account.mapToGlobal(QPoint(self._sidebar_account.width(), 0)))
+        anchor = self._cinema_account if self.cfg.data.ui_layout == "cinema" else self._sidebar_account
+        menu.popup(anchor.mapToGlobal(QPoint(0, anchor.height())))
 
     def _switch_account_menu(self, name):
         index = self.anilist_combo.findData(name)
@@ -1952,22 +1985,28 @@ class MainWindow(QMainWindow):
         for action, button in self._more_links:
             action.setEnabled(button.isEnabled())
 
-    def _on_layout_changed(self, enabled):
+    def _on_layout_changed(self, index):
         self._tab_anim_stop()
-        self.cfg.set(ui_layout="modern" if enabled else "classic")
+        self.cfg.set(ui_layout=self.layout_combo.itemData(index))
         self._apply_ui_layout()
         self._apply_stylesheet()
 
     def _apply_ui_layout(self):
         """Rearrange the existing widgets, preserving live state and callbacks."""
-        modern = self.cfg.data.ui_layout == "modern"
-        if self._layout_mode == modern:
+        mode = self.cfg.data.ui_layout
+        modern = mode != "classic"
+        cinema = mode == "cinema"
+        if self._layout_mode == mode:
             return
-        self._layout_mode = modern
+        was_details = self.stack.currentWidget() in (self._details_v2,self._details_v3)
+        old_details = self._details
+        self._layout_mode = mode
         self._history_state = None
-        self.centralWidget().setObjectName("modernRoot" if modern else "classicRoot")
-        self._sidebar.setVisible(modern)
-        self._page_heading.setVisible(modern and self.stack.currentWidget() is not self._details)
+        self.centralWidget().setObjectName("cinemaRoot" if cinema else "modernRoot" if modern else "classicRoot")
+        self._details = self._details_v3 if cinema else self._details_v2
+        self._sidebar.setVisible(modern and not cinema)
+        self._cinema_nav.setVisible(cinema)
+        self._page_heading.setVisible(modern and not cinema and not was_details)
         self._tabs_host.setVisible(not modern)
         self._classic_actions.setVisible(not modern)
         self._modern_actions.setVisible(modern)
@@ -2042,6 +2081,9 @@ class MainWindow(QMainWindow):
                        self.theme_combo, self.accent_combo):
             widget.show()
         self._brand.show()
+        if cinema:
+            self._header_layout.insertWidget(0,self._brand)
+            self._brand.setMaximumWidth(170);self._brand.setFixedHeight(42)
         self.title_bar.show()
         for card in (self._account_card,self._actions_card):card.show()
         for sep in self._controls_card.findChildren(QFrame):
@@ -2052,6 +2094,15 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._update_cover_size)
         if hasattr(self, "_last_recent"):
             self._on_recent(self._last_recent)
+        if was_details:
+            if old_details is not self._details:
+                self._details.open(old_details.entry,remember=False)
+                self._details.history = list(old_details.history)
+            self.stack.setCurrentWidget(self._details)
+        else:
+            self._on_tab_changed(self.tabbar.currentIndex())
+        self._browse.configure_layout(cinema)
+        self._scrolling.install() if hasattr(self,"_scrolling") else None
 
     def _show_all_stats(self):
         self._stats_classic.setVisible(not self._stats_classic.isVisible())
@@ -2076,6 +2127,9 @@ class MainWindow(QMainWindow):
         self._content_layout.setContentsMargins(0, 0, 0, 0)
         self._page_heading.layout().setContentsMargins(gutter, 16, gutter, 16)
         self._header_layout.setContentsMargins(inset if modern else 16, 8, inset if modern else 16, 0 if modern else 2)
+        if self.cfg.data.ui_layout == "cinema":
+            self._body_layout.setContentsMargins(16,0,16,12)
+            self._body_layout.setSpacing(0)
         if modern:
             self._page_heading.setFixedHeight(112)
             self._brand.setFixedHeight(112 - self._sidebar_layout.contentsMargins().top())
@@ -2108,7 +2162,7 @@ class MainWindow(QMainWindow):
     def _reflow_controls(self):
         if not hasattr(self, "_control_boxes"):
             return
-        modern = self.cfg.data.ui_layout == "modern"
+        modern = self.cfg.data.ui_layout != "classic"
         columns = 1 if modern and self.width() < 760 else 2
         key = (modern, columns)
         if getattr(self, "_control_grid_mode", None) == key:
@@ -2150,6 +2204,13 @@ class MainWindow(QMainWindow):
     def _repaint_artwork(self):
         if self._quitting:
             return
+        if self.cfg.data.ui_layout == "cinema":
+            from .details import Artwork
+            if self._cinema_overview.isVisible(): self._cinema_overview.refresh()
+            for card in self._cinema_history.cards:
+                if card.isVisible(): card.update()
+            for image in self._cinema_stats.findChildren(Artwork):
+                if image.isVisible():image.update()
         if hasattr(self, "_details") and self._details.isVisible():
             self._details.refresh_artwork()
         self._refresh_overview_logo()
@@ -2197,6 +2258,8 @@ class MainWindow(QMainWindow):
         entries.sort(key=lambda e: e.get("last_watched") or 0, reverse=True)
         entries = [self._artwork.enrich(e, episode=True, priority=2) for e in entries[:4]]
         frame.set_entries(entries)
+        if hasattr(self,"_cinema_overview") and self.cfg.data.ui_layout == "cinema":
+            self._cinema_overview.refresh()
         # Reuse the normal history cover downloader for AniList fallback images.
         for entry in entries:
             for field in ("episode_art", "backdrop", "banner_url", "cover"):
@@ -2303,7 +2366,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._library_back)
 
     def _show_library_calendar(self, calendar):
-        modern = self.cfg.data.ui_layout == "modern"
+        modern = self.cfg.data.ui_layout != "classic"
         self._library_modern.setVisible(modern and not calendar)
         self._library_modern.configure(self._applied_theme == "light")
         self._library_stack.setVisible(not modern or calendar)
@@ -2494,11 +2557,12 @@ class MainWindow(QMainWindow):
         appearance_layout.setContentsMargins(self._pad, self._pad, self._pad, self._pad)
         appearance_layout.setSpacing(10)
         appearance_layout.addWidget(self._field_label("APPEARANCE"))
-        self.modern_ui_check = QCheckBox("Use modern interface")
-        self.modern_ui_check.setChecked(self.cfg.data.ui_layout == "modern")
-        self.modern_ui_check.setToolTip("Switch instantly between Modern and Classic. Your activity stays running.")
-        self.modern_ui_check.toggled.connect(self._on_layout_changed)
-        appearance_layout.addWidget(self.modern_ui_check)
+        self.layout_combo = QComboBox()
+        for caption, value in (("V1 · Original", "classic"),("V2 · Current", "modern"),("V3 · Cinema", "cinema")):
+            self.layout_combo.addItem(caption,value)
+        self.layout_combo.setCurrentIndex(self.layout_combo.findData(self.cfg.data.ui_layout))
+        self.layout_combo.currentIndexChanged.connect(self._on_layout_changed)
+        appearance_layout.addWidget(self.layout_combo)
         self.glass_check = QCheckBox("Glass panels && soft accent lighting")
         self.glass_check.setChecked(self.cfg.data.glass_effects)
         self.glass_check.toggled.connect(self._on_glass_changed)
@@ -2507,7 +2571,7 @@ class MainWindow(QMainWindow):
         self.animations_check.setChecked(self.cfg.data.smooth_animations)
         self.animations_check.toggled.connect(self._on_animations_changed)
         appearance_layout.addWidget(self.animations_check)
-        hint = QLabel("A focused dashboard and sidebar navigation. Turn off to return to the classic layout.")
+        hint = QLabel("V1: original tabs · V2: illustrated sidebar · V3: full-width cinematic pages. Switch live.")
         hint.setWordWrap(True)
         hint.setObjectName("subLabel")
         appearance_layout.addWidget(hint)
@@ -2551,7 +2615,7 @@ class MainWindow(QMainWindow):
         self.streaming_url.setPlaceholderText("https://example.com/search?q={query}")
         self.streaming_url.setVisible(self.cfg.data.streaming_site == "Custom")
         stream_layout.addWidget(self.streaming_url)
-        self.streaming_hint = QLabel("Anime clicks open a title search on your selected site. Saved episodes on that site resume directly.")
+        self.streaming_hint = QLabel("Watch actions open your selected site. Saved episodes on that site resume directly.")
         self.streaming_hint.setWordWrap(True); self.streaming_hint.setObjectName("subLabel"); stream_layout.addWidget(self.streaming_hint)
         self.streaming_combo.currentTextChanged.connect(self._save_streaming_site)
         self.streaming_url.editingFinished.connect(self._save_streaming_site)
@@ -2994,7 +3058,7 @@ class MainWindow(QMainWindow):
             self.streaming_hint.setText("Enter an HTTP(S) search URL containing {query}, then press Enter or leave the field to save.")
             return
         self.cfg.set(streaming_site=site, streaming_search_url=url)
-        self.streaming_hint.setText(f"Anime clicks will open on {site}. Saved episodes on that site resume directly.")
+        self.streaming_hint.setText(f"Watch actions open on {site}. Saved episodes on that site resume directly.")
 
     def _set_overview_logo(self, enabled):
         self.cfg.set(overview_title_logo=enabled)
@@ -3426,7 +3490,7 @@ class MainWindow(QMainWindow):
             self.library_account_label.setText("")
         self._library_modern.set_sections(sections, message)
         self._browse.sync_library()
-        if self.cfg.data.ui_layout == "modern":
+        if self.cfg.data.ui_layout != "classic":
             self._maybe_notify_airing(sections)
             return
         for key, listw in self._library_section_lists.items():
@@ -3570,7 +3634,7 @@ class MainWindow(QMainWindow):
         if (payload.get("username") or "") != self.controller.active_anilist_account:
             return
         self._last_calendar_payload = payload
-        if self.cfg.data.ui_layout == "modern" and self._library_stack.isHidden():
+        if self.cfg.data.ui_layout != "classic" and self._library_stack.isHidden():
             return
         import datetime
 
@@ -3701,7 +3765,9 @@ class MainWindow(QMainWindow):
         self._stat_cards["most"].setText(top[0]["title"] if top else "—")
         self._stat_cards["most"].setToolTip(top[0]["title"] if top else "No watch time recorded yet")
         self._stat_cards["titles"].setText(str(len(snapshot["titles"])))
-        if visible_only and self.cfg.data.ui_layout == "modern" and self._stats_classic.isHidden():
+        if self.cfg.data.ui_layout == "cinema" and self._cinema_stats.isVisible():
+            self._cinema_stats.refresh()
+        if visible_only and self.cfg.data.ui_layout != "classic" and self._stats_classic.isHidden():
             return
 
         if self._chart_view is not None:
@@ -3807,6 +3873,12 @@ class MainWindow(QMainWindow):
         self._tab_anim_stop()
         snapshot = self.isVisible() and self.cfg.data.smooth_animations and self.stack.currentIndex() != index
         self.stack.setCurrentIndex(index)
+        if self.cfg.data.ui_layout == "cinema":
+            pages = {0:self._cinema_overview, self._history_tab_index:self._cinema_history,
+                     self._stats_tab_index:self._cinema_stats}
+            if index in pages:
+                self.stack.setCurrentWidget(pages[index])
+                pages[index].refresh()
         self._sync_navigation(index)
         if index == self._stats_tab_index:
             state = (id(self.controller.watchlog), self.controller.watchlog.revision)
@@ -4010,6 +4082,7 @@ class MainWindow(QMainWindow):
         if family not in QFontDatabase.families(): family = "Figtree"
         family = family.replace("\\", "\\\\").replace('"', '\\"')
         from .modern import oled_qss, neutral_surfaces
+        from .cinema import stylesheet as cinema_qss
         QApplication.instance().setStyleSheet(neutral_surfaces(
             build_theme_qss(
                 self._applied_theme,
@@ -4024,6 +4097,7 @@ class MainWindow(QMainWindow):
             + (oled_qss() if self._applied_theme == "oled" else "")
             + f'\nQWidget {{ font-family: "{family}"; }}',
             self._applied_theme, self.cfg.data.accent)
+            + (cinema_qss(self._applied_theme) if self.cfg.data.ui_layout == "cinema" else "")
         )
         self._page_heading.accent = self.cfg.data.accent
         self._page_heading.light = self._applied_theme == "light"
@@ -4259,6 +4333,8 @@ class MainWindow(QMainWindow):
             idx = self.anilist_combo.findData(active)
             self.anilist_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self._load_account_avatar()
+        if hasattr(self,"_cinema_account"):
+            self._cinema_account.setText(active or "Account")
         if hasattr(self, "_history_modern"):
             self._on_recent(self.controller.recent.items())
         if hasattr(self,"_sidebar_account"):
@@ -4862,6 +4938,8 @@ class MainWindow(QMainWindow):
         self._history_state = state
         entries = self.controller.watchlog.history(entries, copy_result=False)
         self._history_modern.set_entries(entries, ordered=True)
+        if self.cfg.data.ui_layout == "cinema" and self._cinema_history.isVisible():
+            self._cinema_history.refresh()
         view = self.recent_list.view_state()
         self._recent_icon_pending.clear()
         self.recent_list.clear()
@@ -4870,7 +4948,7 @@ class MainWindow(QMainWindow):
             item.setFlags(Qt.NoItemFlags)
             self.recent_list.addItem(item)
             return
-        for entry in (entries[:250] if self.cfg.data.ui_layout == "modern" else entries):
+        for entry in (entries[:250] if self.cfg.data.ui_layout != "classic" else entries):
             title = entry.get("title", "?")
             ep = entry.get("episode")
             site = entry.get("website", "")
@@ -5703,6 +5781,8 @@ class MainWindow(QMainWindow):
     def show_placeholder(self):
         self._progress_animation.stop()
         self._current_payload = None
+        if hasattr(self,"_cinema_overview") and self.cfg.data.ui_layout == "cinema":
+            self._cinema_overview.refresh()
         self._load_banner("")
         self.anime_title.setText("No anime detected")
         self._refresh_overview_logo()
