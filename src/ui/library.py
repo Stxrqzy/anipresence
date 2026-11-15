@@ -95,7 +95,7 @@ class PosterDelegate(QStyledItemDelegate):
         pixmap = window._images.get(window._cover_cache_path(cover), math.ceil(area.width()*dpr), math.ceil(area.height()*dpr)) if cover else QPixmap()
         if pixmap.isNull() and cover:
             window._request_library_poster(cover)
-        key = (tuple(entry.get(field) for field in ("title", "title_english", "cover", "progress", "episodes", "mean_score", "status", "library_section","relation","season_year")),
+        key = (tuple(entry.get(field) for field in ("title", "title_english", "cover", "progress", "episodes", "mean_score", "status", "library_section","relation","season_year","suggestion_reason")),
                option.rect.width(),option.rect.height(),dpr,pixmap.cacheKey(),window._applied_theme,window.cfg.data.ui_layout,window.cfg.data.accent,option.font.key())
         if key not in self.frames:
             frame = QPixmap(math.ceil(option.rect.width()*dpr),math.ceil(option.rect.height()*dpr))
@@ -203,6 +203,10 @@ class PosterDelegate(QStyledItemDelegate):
         elif cinema and entry.get("relation"):
             p.setPen(QColor("#666666" if light else "#bbbbbb"))
             label=entry["relation"]+(f" · {entry['season_year']}" if entry.get("season_year") else "")
+            p.drawText(QRectF(area.left()+2,area.bottom()+7,area.width()-4,22),Qt.AlignLeft|Qt.AlignVCenter,label)
+        elif cinema and entry.get("suggestion_reason"):
+            p.setPen(QColor("#666666" if light else "#bbbbbb"))
+            label=p.fontMetrics().elidedText(entry["suggestion_reason"],Qt.ElideRight,int(area.width()-4))
             p.drawText(QRectF(area.left()+2,area.bottom()+7,area.width()-4,22),Qt.AlignLeft|Qt.AlignVCenter,label)
         p.restore()
 
@@ -381,6 +385,10 @@ class LibraryPanel(QWidget):
             self.empty.setText(message)
 
     def refresh(self, *_):
+        if self.window().cfg.data.ui_layout=="cinema" and not self.isVisible():
+            self._grid_dirty=True
+            return
+        self._grid_dirty=False
         query=normalized_title(self.search.text())
         minimum=(0,70,80,90)[self.score.currentIndex()]
         rows=[e for e in self.entries if (self.section=="All" or e["library_section"]==self.section)
@@ -410,6 +418,10 @@ class LibraryPanel(QWidget):
         self.search.clear()
         for control in (self.genre,self.year,self.score,self.status):control.setCurrentIndex(0)
         self.sort.setCurrentIndex(0);self.select_section("All")
+
+    def showEvent(self,event):
+        super().showEvent(event)
+        if getattr(self,"_grid_dirty",False):self.refresh()
 
     def resizeEvent(self,event):
         for i, button in enumerate(self.buttons.values()):

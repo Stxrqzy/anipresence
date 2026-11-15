@@ -5,7 +5,7 @@ from PySide6.QtCore import Qt, QRectF, QSize, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QLinearGradient, QPen
 from PySide6.QtWidgets import (QAbstractButton, QFrame, QGridLayout, QHBoxLayout, QLabel,
                               QLineEdit, QPushButton, QScrollArea, QVBoxLayout, QWidget, QComboBox)
-from .details import Artwork, Hero, text, ImageReveal, artwork_placeholder
+from .details import Artwork, Hero, text, ImageReveal, artwork_placeholder, watched_badge
 from .poster import draw_filled_pixmap
 
 
@@ -99,6 +99,9 @@ class LandscapeCard(QAbstractButton):
         if duration:
             p.fillRect(QRectF(0, self.height()-5, self.width(), 4), QColor(255,255,255,50))
             p.fillRect(QRectF(0, self.height()-5, self.width()*min(1,current/duration), 4), Qt.white)
+        if self.history and ((duration and current/duration>=.9) or
+                             (not duration and e.get("history_source")=="AniList feed" and e.get("episode"))):
+            watched_badge(p,QRectF(12,12,32,32))
         if self.hasFocus() or self.underMouse():
             p.setClipping(False); p.setBrush(Qt.NoBrush); p.setPen(QPen(Qt.white, 2)); p.drawRoundedRect(rect,22,22)
 
@@ -135,7 +138,7 @@ class Overview(Page):
         else:
             self.window()._navigate(self.window()._browse_tab_index)
 
-    def refresh(self):
+    def refresh(self, refresh_cards=True):
         w = self.window(); e = w._current_payload or {}
         self.payload = e
         self.hero.url = e.get("backdrop") or e.get("banner_url") or e.get("cover_url") or e.get("cover") or ""
@@ -147,6 +150,12 @@ class Overview(Page):
         self.subtitle.setText(f"Episode {e.get('episode') or '—'} · {e.get('website') or 'Playing in your browser'}" if e else
                               "Start watching in your browser. Your anime and progress appear here.")
         self.button.setText("Continue watching" if e else "Discover anime")
+        state=(id(w.controller.watchlog),w.controller.watchlog.revision,w._continue_frame.entries)
+        if not refresh_cards or state==getattr(self,"_continue_state",None):
+            self.hero.update();self.logo.update()
+            for card in self.cards:card.update()
+            return
+        self._continue_state=state
         from .playback import playback_state, resume_entry
         history=w.controller.watchlog.history(w.controller.recent.items(),copy_result=False)
         library=w._library_modern.entries
@@ -263,6 +272,8 @@ def stylesheet(theme):
     QWidget#cinemaRoot QPushButton#winMin, QWidget#cinemaRoot QPushButton#winMax,
     QWidget#cinemaRoot QPushButton#winClose {{padding:0;min-height:0;border-radius:4px;background:transparent;}}
     QWidget#cinemaRoot QFrame#detailHero {{background:transparent;}}
+    QWidget#cinemaRoot QLabel#pageTitle {{font-size:28px;font-weight:750;color:{ink};}}
+    QWidget#cinemaRoot QLabel#pageDescription {{font-size:14px;color:{muted};}}
     QWidget#cinemaRoot QFrame#sidebar {{background:{panel};border:0;border-radius:18px;}}
     QWidget#cinemaRoot QPushButton#navButton {{background:transparent;color:{muted};text-align:left;padding:14px 12px;border-radius:12px;}}
     QWidget#cinemaRoot QPushButton#navButton:checked {{background:#383838;color:white;}}

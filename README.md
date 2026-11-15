@@ -15,6 +15,23 @@ from the page title.
 
 ### Version 3.0 interface
 
+Version 3.0.11 restores **V2's illustrated top bar in V3**, including the selected
+scenery and current anime artwork. The **Sidebar** button or **Ctrl+B** hides and
+restores the sidebar; the preference persists across restarts.
+
+**Ctrl+K** opens quick search from any page. Library/history matches appear
+immediately, including alternate titles; AniList catalogue results follow after
+a short typing delay. Use arrow keys and Enter to open details, or Esc to close.
+V3 Browse adds **Trending / Airing now / Upcoming / For you**. For you uses up to
+four watching/completed AniList titles as recommendation seeds, explains each
+suggestion, and excludes anime already on your list.
+
+Watched episode artwork now has a **corner checkmark** matching the completed
+badge style. Catalogue/recommendation queries have a bounded ten-minute cache;
+rapid searches retain only the latest pending request. V3 defers hidden library
+grids and legacy history/statistics lists, batches image repaints, and prioritizes
+visible episode artwork.
+
 Version 3.0.10 adds a **sidebar to V3**, with an icon-only rail on narrow windows
 and the account menu at the bottom. Artwork has loading placeholders and short
 reveals that respect the animation setting. Missing episode stills fall back to

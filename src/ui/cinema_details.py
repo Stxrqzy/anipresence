@@ -57,6 +57,9 @@ class CinemaDetails(DetailsPage):
         self.synopsis.setMaximumWidth(850);self.expand.setMaximumWidth(80)
         self.airing=text("","cinemaMeta");body.addWidget(self.airing)
         self.airing_timer=QTimer(self);self.airing_timer.setInterval(60000);self.airing_timer.timeout.connect(self.refresh_airing)
+        self.visible_artwork_timer=QTimer(self);self.visible_artwork_timer.setSingleShot(True);self.visible_artwork_timer.setInterval(60)
+        self.visible_artwork_timer.timeout.connect(self.refresh_artwork)
+        self.verticalScrollBar().valueChanged.connect(lambda _:self.visible_artwork_timer.start())
         self.buttons=QGridLayout()
         self.watch.setObjectName("cinemaPrimary")
         self.trailer=action("Trailer",self.open_trailer)
@@ -103,6 +106,7 @@ class CinemaDetails(DetailsPage):
         self.panes.setCurrentIndex(index)
         for i,b in self.tabs.items():b.setChecked(i==index)
         self.reflow()
+        if hasattr(self,"visible_artwork_timer"):self.visible_artwork_timer.start()
 
     def refresh_artwork(self):
         super().refresh_artwork()
@@ -149,6 +153,7 @@ class CinemaDetails(DetailsPage):
         self.tabs[0].setText(f"Episodes  {self.episode_count or '—'}")
         self.refresh_artwork()
         self.reflow()
+        self.visible_artwork_timer.start()
 
     def render_episodes(self):
         clear(self.episodes_layout);self.cards=[]
@@ -166,6 +171,8 @@ class CinemaDetails(DetailsPage):
             state=self.progress_state["episodes"].get(number,{})
             fraction=state.get("fraction")
             watched=state.get("watched") or (number<=self.progress_state["progress"] and fraction is None)
+            art.watched=bool(watched)
+            art.setAccessibleName(f"Episode {number} · "+("Watched" if watched else "Not watched"))
             badge="✓ Watched" if watched else f"Resume · {fraction:.0%}" if fraction is not None and fraction>0 else "Not watched"
             body.addWidget(text(badge,"cinemaMuted"))
             watch=action(f"Watch · Ep {number}",lambda checked=False,n=number:self.watch_episode(n),"ghost")
@@ -219,6 +226,7 @@ class CinemaDetails(DetailsPage):
     def showEvent(self,event):
         super().showEvent(event)
         if hasattr(self,"airing_timer"):self.airing_timer.start();self.refresh_airing()
+        if hasattr(self,"visible_artwork_timer"):self.visible_artwork_timer.start()
 
     def hideEvent(self,event):
         if hasattr(self,"airing_timer"):self.airing_timer.stop()
@@ -250,3 +258,4 @@ class CinemaDetails(DetailsPage):
     def resizeEvent(self,event):
         super().resizeEvent(event)
         self.reflow()
+        if hasattr(self,"visible_artwork_timer"):self.visible_artwork_timer.start()

@@ -202,6 +202,84 @@ def test_v3_sidebar_all_time_and_responsive_episode_details(make_window,monkeypa
     assert window._settings_page.widget().width()<=window._settings_page.viewport().width()
 
 
+def test_v3_header_hidden_sidebar_search_and_watched_art(make_window):
+    app,window=make_window(ui_layout="cinema",smooth_animations=False)
+    window.show();app.processEvents()
+    assert window._page_heading.isVisible()
+    window.sidebar_toggle.click();app.processEvents()
+    assert window._sidebar.isHidden() and window.cfg.data.sidebar_hidden
+    assert ConfigManager(window.cfg.path).data.sidebar_hidden
+    window.sidebar_toggle.click()
+    entry={"anilist_id":42,"title":"Example","episodes":12,"progress":4,"status":"CURRENT"}
+    window._on_library_loaded({"username":"","sections":{"Watching":[entry]}})
+    window._open_quick_search()
+    dialog=window._quick_search
+    dialog.search.setText("Example");dialog.timer.stop()
+    assert dialog.results.count()==1
+    dialog.receive(dialog.generation-1,{"entries":[{"anilist_id":99,"title":"Stale"}]})
+    assert dialog.results.count()==1
+    dialog.receive(dialog.generation,{"entries":[entry,{"anilist_id":99,"title":"Another example"}]})
+    assert dialog.results.count()==2
+    dialog.results.setCurrentRow(0);dialog.activate_current();app.processEvents()
+    assert window.stack.currentWidget() is window._details
+    assert window._details.cards[0][1].watched
+    assert not window._details.cards[4][1].watched
+
+
+def test_v3_defers_hidden_legacy_lists_and_library_grid(make_window):
+    app,window=make_window(ui_layout="cinema",smooth_animations=False)
+    window.show();app.processEvents()
+    rows=[{"title":f"Example {i}","anilist_id":i+1,"episodes":12,"progress":2,"status":"CURRENT"} for i in range(500)]
+    old=window.recent_list.count()
+    window._on_recent([dict(e,episode=2) for e in rows])
+    assert window.recent_list.count()==old
+    window._on_library_loaded({"username":"","sections":{"Watching":rows}})
+    assert len(window._library_modern.entries)==500
+    assert window._library_modern.grid.count()==0
+    window._navigate(window._library_tab_index);app.processEvents()
+    assert window._library_modern.grid.count()==500
+
+
+def test_interactive_queries_only_run_first_and_latest(make_window):
+    import threading
+    from PySide6.QtTest import QTest
+    from src.ui.tasks import LatestTask
+    app,window=make_window(smooth_animations=False)
+    task=LatestTask(window);release=threading.Event();calls=[];results=[]
+    task.completed.connect(lambda token,result:results.append(token))
+    def first():
+        release.wait(2);calls.append("first");return {}
+    task.submit(0,first)
+    task.submit(1,lambda:(calls.append("obsolete") or {}))
+    task.submit(2,lambda:(calls.append("latest") or {}))
+    release.set()
+    for _ in range(100):
+        if len(results)==2:break
+        QTest.qWait(10)
+    assert calls==["first","latest"] and results==[0,2]
+
+
+def test_discovery_modes_restore_filters_and_invalidate_personal_results(make_window,monkeypatch):
+    app,window=make_window(ui_layout="cinema",smooth_animations=False)
+    panel=window._browse
+    submitted=[]
+    monkeypatch.setattr(panel.task,"submit",lambda token,work:submitted.append(token))
+    panel.select_discovery("airing")
+    assert panel.filters()["status"]=="RELEASING"
+    assert not panel.studio.signalsBlocked()
+    panel.select_discovery("upcoming")
+    assert panel.filters()["status"]=="NOT_YET_RELEASED"
+    panel.select_discovery("personal")
+    generation=panel.generation
+    window._on_library_loaded({"username":"","sections":{"Watching":[{"title":"Seed","anilist_id":1,"status":"CURRENT"}]}})
+    assert panel.generation>generation
+    panel.receive(generation,1,{"entries":[{"title":"Old account suggestion","anilist_id":99}]})
+    assert panel.grid.count()==0
+    panel.select_discovery("trending")
+    assert panel.filters()["status"] is None
+    assert panel.discovery_buttons["trending"].isChecked()
+
+
 def test_overview_logo_fallback_and_account_flyout(make_window, monkeypatch, tmp_path):
     from PySide6.QtGui import QPixmap, QColor
     app, window = make_window(overview_title_logo=True, anilist_accounts=["Alice", "Bob"],

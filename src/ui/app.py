@@ -921,7 +921,10 @@ class MainWindow(QMainWindow):
         from .image_cache import ImageCache
         from .scrolling import ScrollController
         self._images = ImageCache(self)
-        self._images.ready.connect(self._repaint_artwork)
+        self._image_repaint_timer=QTimer(self)
+        self._image_repaint_timer.setSingleShot(True);self._image_repaint_timer.setInterval(32)
+        self._image_repaint_timer.timeout.connect(self._repaint_artwork)
+        self._images.ready.connect(self._queue_artwork_repaint)
         self._scrolling = ScrollController(self)
         self._recent_icon_pending = {}   # cover-url -> QListWidgetItem waiting for its icon
         self._recent_icon_fetching = set()  # cover-urls with a download in flight
@@ -965,6 +968,11 @@ class MainWindow(QMainWindow):
         self._system_refresh.setInterval(10000)
         self._system_refresh.timeout.connect(self._maybe_resync_system_theme)
         self._build_ui()
+        from PySide6.QtGui import QShortcut, QKeySequence
+        self._search_shortcut = QShortcut(QKeySequence("Ctrl+K"),self)
+        self._search_shortcut.activated.connect(self._open_quick_search)
+        self._sidebar_shortcut = QShortcut(QKeySequence("Ctrl+B"),self)
+        self._sidebar_shortcut.activated.connect(self._toggle_sidebar)
         self._connect_signals()
         self._scrolling.install()
         self._populate_anilist_accounts()
@@ -1121,6 +1129,9 @@ class MainWindow(QMainWindow):
     def _update_header_for_width(self):
         """Tuck header elements away on narrow windows so nothing gets clipped."""
         w = self.width()
+        if hasattr(self,"quick_search_button"):
+            self.quick_search_button.setText("Search" if w<760 else "Search · Ctrl+K")
+            self.quick_search_button.setToolTip("Search library, history and AniList · Ctrl+K")
         if hasattr(self, "_sidebar"):
             narrow = w < 900
             self._sidebar.setFixedWidth(68 if narrow else 220)
@@ -1332,6 +1343,14 @@ class MainWindow(QMainWindow):
         self._brand.mousePressEvent = lambda _event: self._on_about()
         header.addWidget(self._brand, 1)
         header.addStretch(1)
+        self.sidebar_toggle = QPushButton("Sidebar")
+        self.sidebar_toggle.setObjectName("ghost");self.sidebar_toggle.setCheckable(True)
+        self.sidebar_toggle.clicked.connect(self._toggle_sidebar)
+        header.addWidget(self.sidebar_toggle)
+        self.quick_search_button = QPushButton("Search · Ctrl+K")
+        self.quick_search_button.setObjectName("ghost")
+        self.quick_search_button.clicked.connect(self._open_quick_search)
+        header.addWidget(self.quick_search_button)
 
         self.chrome_chip = QLabel(
             f"{BROWSER_NAMES.get(self.cfg.data.browser, 'Chrome')} · …"
@@ -1941,6 +1960,9 @@ class MainWindow(QMainWindow):
             button.setIcon(navigation_icon(i, color))
         self._page_title.setText(self._page_names[index])
         self._page_description.setText(self._page_descriptions[index])
+        if self.cfg.data.ui_layout=="cinema" and hasattr(self,"_details") and self.stack.currentWidget() is self._details:
+            self._page_title.setText("Anime details")
+            self._page_description.setText(self._details.entry.get("title") or "")
         self._page_heading.variant = index
         self._page_heading.update()
         if hasattr(self, "_cinema_nav_buttons"):
@@ -1955,6 +1977,24 @@ class MainWindow(QMainWindow):
             self._on_tab_changed(index)
         else:
             self.tabbar.setCurrentIndex(index)
+
+    def _toggle_sidebar(self):
+        if self.cfg.data.ui_layout=="classic":return
+        self.cfg.set(sidebar_hidden=not self.cfg.data.sidebar_hidden)
+        self._sync_sidebar()
+
+    def _sync_sidebar(self):
+        modern=self.cfg.data.ui_layout!="classic"
+        self._sidebar.setVisible(modern and not self.cfg.data.sidebar_hidden)
+        self.sidebar_toggle.setVisible(modern)
+        self.sidebar_toggle.setChecked(modern and not self.cfg.data.sidebar_hidden)
+        self.sidebar_toggle.setToolTip(("Show" if self.cfg.data.sidebar_hidden else "Hide")+" sidebar · Ctrl+B")
+        self.sidebar_toggle.setAccessibleName(self.sidebar_toggle.toolTip())
+
+    def _open_quick_search(self):
+        from .quick_search import QuickSearch
+        if not hasattr(self,"_quick_search"):self._quick_search=QuickSearch(self)
+        self._quick_search.present()
 
     def _show_account_menu(self):
         menu = QMenu(self)
@@ -2002,11 +2042,12 @@ class MainWindow(QMainWindow):
         old_details = self._details
         self._layout_mode = mode
         self._history_state = None
+        self._stats_state = None
         self.centralWidget().setObjectName("cinemaRoot" if cinema else "modernRoot" if modern else "classicRoot")
         self._details = self._details_v3 if cinema else self._details_v2
-        self._sidebar.setVisible(modern)
+        self._sync_sidebar()
         self._cinema_nav.hide()
-        self._page_heading.setVisible(modern and not cinema and not was_details)
+        self._page_heading.setVisible(modern and (cinema or not was_details))
         self._tabs_host.setVisible(not modern)
         self._classic_actions.setVisible(not modern)
         self._modern_actions.setVisible(modern)
@@ -2102,6 +2143,7 @@ class MainWindow(QMainWindow):
         else:
             self._on_tab_changed(self.tabbar.currentIndex())
         self._browse.configure_layout(cinema)
+        if not cinema:self._refresh_stats(visible_only=True)
         self._scrolling.install() if hasattr(self,"_scrolling") else None
 
     def _show_all_stats(self):
@@ -2130,6 +2172,7 @@ class MainWindow(QMainWindow):
         if self.cfg.data.ui_layout == "cinema":
             self._body_layout.setContentsMargins(16,0,16,12)
             self._body_layout.setSpacing(12)
+            self._page_heading.setFixedHeight(112)
         if modern:
             self._page_heading.setFixedHeight(112)
             self._brand.setFixedHeight(112 - self._sidebar_layout.contentsMargins().top())
@@ -2209,7 +2252,7 @@ class MainWindow(QMainWindow):
             return
         if self.cfg.data.ui_layout == "cinema":
             from .details import Artwork
-            if self._cinema_overview.isVisible(): self._cinema_overview.refresh()
+            if self._cinema_overview.isVisible(): self._cinema_overview.refresh(refresh_cards=False)
             for card in self._cinema_history.cards:
                 if card.isVisible(): card.update()
             for image in self._cinema_stats.findChildren(Artwork):
@@ -2227,6 +2270,10 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_continue_frame") and self._continue_frame.isVisible():
             for card in self._continue_frame.cards:
                 card.update()
+
+    def _queue_artwork_repaint(self):
+        if not self._quitting and not self._image_repaint_timer.isActive():
+            self._image_repaint_timer.start()
 
     def _build_continue_strip(self):
         from .continue_watching import ContinueWatching
@@ -2259,10 +2306,12 @@ class MainWindow(QMainWindow):
                 entry = dict(entry, **{k: v for k, v in measured.items() if v is not None})
             entries.append(entry)
         entries.sort(key=lambda e: e.get("last_watched") or 0, reverse=True)
-        entries = [self._artwork.enrich(e, episode=True, priority=2) for e in entries[:4]]
+        cinema=self.cfg.data.ui_layout=="cinema"
+        entries = entries[:4] if cinema else [self._artwork.enrich(e, episode=True, priority=2) for e in entries[:4]]
         frame.set_entries(entries)
         if hasattr(self,"_cinema_overview") and self.cfg.data.ui_layout == "cinema":
             self._cinema_overview.refresh()
+        if cinema:return  # V3 requests artwork from visible cards, not hidden legacy widgets.
         # Reuse the normal history cover downloader for AniList fallback images.
         for entry in entries:
             for field in ("episode_art", "backdrop", "banner_url", "cover"):
@@ -3446,7 +3495,10 @@ class MainWindow(QMainWindow):
             self._details.entry = {}
         self._tab_anim_stop()
         self.stack.setCurrentWidget(self._details)
-        self._page_heading.hide()
+        self._page_heading.setVisible(self.cfg.data.ui_layout=="cinema")
+        if self.cfg.data.ui_layout=="cinema":
+            self._page_title.setText("Anime details")
+            self._page_description.setText(entry.get("title") or "")
         self._details.open(entry)
         self._scrolling.install()
 
@@ -3494,6 +3546,7 @@ class MainWindow(QMainWindow):
             self.library_account_label.setText("")
         self._library_modern.set_sections(sections, message)
         self._browse.sync_library()
+        self._browse.library_changed()
         if self.cfg.data.ui_layout != "classic":
             self._maybe_notify_airing(sections)
             return
@@ -3757,6 +3810,11 @@ class MainWindow(QMainWindow):
 
     def _refresh_stats(self, visible_only=False):
         """Re-read the controller's WatchLog and repaint the Stats tab."""
+        if self.cfg.data.ui_layout=="cinema":
+            if self._cinema_stats.isVisible():
+                self._cinema_stats.refresh()
+                self._stats_state=(id(self.controller.watchlog),self.controller.watchlog.revision)
+            return
         self._stats_state = (id(self.controller.watchlog), self.controller.watchlog.revision)
         from datetime import date, timedelta
         from ..core.activity_stats import streak
@@ -3873,7 +3931,7 @@ class MainWindow(QMainWindow):
         previous_chart.deleteLater()
 
     def _on_tab_changed(self, index):
-        self._page_heading.setVisible(self.cfg.data.ui_layout == "modern")
+        self._page_heading.setVisible(self.cfg.data.ui_layout != "classic")
         self._tab_anim_stop()
         snapshot = self.isVisible() and self.cfg.data.smooth_animations and self.stack.currentIndex() != index
         self.stack.setCurrentIndex(index)
@@ -4940,6 +4998,9 @@ class MainWindow(QMainWindow):
         if state == getattr(self, "_history_state", None):
             return
         self._history_state = state
+        if self.cfg.data.ui_layout=="cinema":
+            if self._cinema_history.isVisible():self._cinema_history.refresh()
+            return
         entries = self.controller.watchlog.history(entries, copy_result=False)
         self._history_modern.set_entries(entries, ordered=True)
         if self.cfg.data.ui_layout == "cinema" and self._cinema_history.isVisible():
@@ -5243,8 +5304,8 @@ class MainWindow(QMainWindow):
                     self._poster_failed.add(orig)
             else:
                 self._poster_failed.add(orig)
-            self._images.invalidate_missing()
-            self._repaint_artwork()
+            self._images.invalidate_missing(self._cover_cache_path(orig))
+            self._queue_artwork_repaint()
             reply.deleteLater()
             return
         if orig in self._banner_requests:

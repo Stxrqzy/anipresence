@@ -52,6 +52,7 @@ class Config:
     streaming_search_url: str = ""
     navigation_version: int = 2
     ui_layout: str = "cinema"       # V1 classic | V2 modern | V3 cinema
+    sidebar_hidden: bool = False
     glass_effects: bool = True
     smooth_animations: bool = True
     accent: str = "#7c5cff"

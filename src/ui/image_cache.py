@@ -48,8 +48,9 @@ class ImageCache(QObject):
             self.pool.start(_Decode(key, self.result))
         return QPixmap()
 
-    def invalidate_missing(self):
-        self.failed.clear()
+    def invalidate_missing(self,path=None):
+        if path is None:self.failed.clear()
+        else:self.failed={key for key in self.failed if key[0]!=str(path)}
 
     def _loaded(self, key, image):
         self.pending.discard(key)

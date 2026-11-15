@@ -1,7 +1,7 @@
 """In-app details with bounded episode pages and asynchronous metadata/artwork."""
 import threading
 from PySide6.QtCore import Qt, QRectF, Signal, QVariantAnimation, QEasingCurve
-from PySide6.QtGui import QColor, QPainter, QLinearGradient, QPixmap
+from PySide6.QtGui import QColor, QPainter, QLinearGradient, QPixmap, QPen, QPainterPath
 from PySide6.QtWidgets import (QWidget, QScrollArea, QFrame, QVBoxLayout, QHBoxLayout,
                               QGridLayout, QLabel, QPushButton, QComboBox, QSizePolicy)
 from ..anime.details import load_details
@@ -42,6 +42,17 @@ def artwork_placeholder(painter, rect, light=False, caption=""):
     painter.restore()
 
 
+def watched_badge(painter, rect):
+    """Frosted completed check, shared by episode stills and history artwork."""
+    painter.save();painter.setOpacity(1);painter.setRenderHint(QPainter.Antialiasing)
+    painter.setPen(QPen(QColor(255,255,255,170),1));painter.setBrush(QColor(245,248,252,220))
+    painter.drawRoundedRect(rect,10,10)
+    c=rect.center();path=QPainterPath()
+    path.moveTo(c.x()-7,c.y());path.lineTo(c.x()-2,c.y()+5);path.lineTo(c.x()+8,c.y()-6)
+    painter.setPen(QPen(QColor("#20232d"),2.4,Qt.SolidLine,Qt.RoundCap,Qt.RoundJoin))
+    painter.setBrush(Qt.NoBrush);painter.drawPath(path);painter.restore()
+
+
 class Artwork(QWidget):
     """Transparent fitted logos, or cropped artwork, using the shared decoded cache."""
     def __init__(self, fit=False):
@@ -49,6 +60,7 @@ class Artwork(QWidget):
         self.url = ""
         self.fallback_url = ""
         self.using_fallback = False
+        self.watched = False
         self.fit = fit
         self.reveal=ImageReveal(self)
         self.setObjectName("surfaceContent")
@@ -78,6 +90,7 @@ class Artwork(QWidget):
                 else:
                     p.setPen(QColor("#888888"))
                     p.drawText(self.rect(), Qt.AlignCenter, "Artwork unavailable")
+                if self.watched:watched_badge(p,QRectF(self.width()-42,10,32,32))
             return
         p = QPainter(self)
         p.setRenderHint(QPainter.SmoothPixmapTransform)
@@ -91,6 +104,7 @@ class Artwork(QWidget):
         if cinema and self.using_fallback:
             p.setOpacity(1);p.fillRect(QRectF(0,self.height()-24,self.width(),24),QColor(0,0,0,150))
             p.setPen(Qt.white);p.drawText(QRectF(4,self.height()-24,self.width()-8,24),Qt.AlignCenter,"Series artwork")
+        if self.watched:watched_badge(p,QRectF(self.width()-42,10,32,32))
 
 
 class Hero(QFrame):
@@ -305,7 +319,8 @@ class DetailsPage(QScrollArea):
         has_logo = bool(self.logo.url) and not self.logo.pixmap().isNull()
         self.logo.setVisible(has_logo); self.title.setVisible(not has_logo)
         for number, art, title, description, card in self.cards:
-            row = self.window()._artwork.enrich(dict(self.entry, episode=number, episode_title=""), episode=True, priority=1)
+            request=self.window().cfg.data.ui_layout!="cinema" or (self.isVisible() and not art.visibleRegion().isEmpty())
+            row = self.window()._artwork.enrich(dict(self.entry, episode=number, episode_title=""), episode=True, priority=1,request=request)
             art.url = row.get("episode_art") or ""
             title.setText(f"{number}. {row.get('episode_title') or 'Episode '+str(number)}")
             desc = row.get("episode_description") or "Description unavailable."
